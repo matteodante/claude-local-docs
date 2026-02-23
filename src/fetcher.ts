@@ -3,17 +3,26 @@
  * No AI processing, no truncation — returns full text as-is.
  */
 
-const TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_SIZE = 200 * 1024 * 1024; // 200MB
 
 export type FetchResult =
-  | { ok: true; content: string; byteLength: number; contentType: string }
+  | { ok: true; content: string; byteLength: number; contentType: string; finalUrl: string }
   | { ok: false; error: string };
 
-export async function fetchDocContent(url: string): Promise<FetchResult> {
+export interface FetchOptions {
+  /** Timeout in milliseconds (default 120s). Use 15s for URL probing. */
+  timeoutMs?: number;
+}
+
+export async function fetchDocContent(
+  url: string,
+  options?: FetchOptions
+): Promise<FetchResult> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     const res = await fetch(url, {
       signal: controller.signal,
@@ -51,10 +60,11 @@ export async function fetchDocContent(url: string): Promise<FetchResult> {
       content,
       byteLength: buffer.byteLength,
       contentType,
+      finalUrl: res.url,
     };
   } catch (err: any) {
     if (err.name === "AbortError") {
-      return { ok: false, error: `Request timed out after ${TIMEOUT_MS / 1000}s` };
+      return { ok: false, error: `Request timed out after ${timeoutMs / 1000}s` };
     }
     return { ok: false, error: err.message ?? String(err) };
   }

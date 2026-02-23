@@ -9,6 +9,7 @@ import { indexDocument } from "./indexer.js";
 import { searchDocs } from "./search.js";
 import { analyzeDependencies } from "./workspace.js";
 import { fetchDocContent } from "./fetcher.js";
+import { resolveDocsUrl } from "./discovery.js";
 import type { Dependency } from "./types.js";
 
 const projectRoot = resolveProjectRoot();
@@ -335,6 +336,56 @@ server.registerTool(
           {
             type: "text" as const,
             text: JSON.stringify({ success: false, error: err.message }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Tool 7: discover_and_fetch_docs ---
+server.registerTool(
+  "discover_and_fetch_docs",
+  {
+    description:
+      "Discover, fetch, and index documentation for a library automatically. Queries npm registry for homepage/repo, probes for llms-full.txt and llms.txt, detects index files (link lists) and expands them by fetching each linked page, converts HTML to markdown. Fully self-contained — no WebSearch or WebFetch needed.",
+    inputSchema: {
+      library: z.string().describe("npm package name (e.g. 'react', '@tanstack/query')"),
+      version: z.string().optional().describe("Library version (optional, auto-detected from npm)"),
+    },
+  },
+  async ({ library, version }) => {
+    try {
+      const discovery = await resolveDocsUrl(library);
+      await store.saveRawDoc(library, discovery.content);
+      const chunks = await indexDocument(discovery.content, library);
+      const result = await store.addLibrary(library, version ?? "latest", discovery.url, chunks);
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              success: true,
+              library,
+              source: discovery.source,
+              url: discovery.url,
+              chunkCount: result.chunkCount,
+              byteLength: discovery.byteLength,
+              totalIndexSize: result.indexSize,
+              expandedUrls: discovery.expandedUrls,
+              failedUrls: discovery.failedUrls,
+            }),
+          },
+        ],
+      };
+    } catch (err: any) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: false, library, error: err.message }),
           },
         ],
         isError: true,

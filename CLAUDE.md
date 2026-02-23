@@ -8,8 +8,8 @@ A local-first alternative to Context7 for Claude Code. Provides offline-capable 
 
 The plugin has two parts:
 
-1. **MCP server** (`src/index.ts`) — Exposes 6 tools via stdio transport using `server.registerTool()`. Handles storage, indexing, search, and raw doc fetching.
-2. **`/fetch-docs` command** (`commands/fetch-docs.md`) — Instructs Claude to act as a research agent: search the web for docs, fetch them, and call the MCP tools to store them.
+1. **MCP server** (`src/index.ts`) — Exposes 7 tools via stdio transport using `server.registerTool()`. Handles storage, indexing, search, doc discovery, and raw doc fetching.
+2. **`/fetch-docs` command** (`commands/fetch-docs.md`) — Instructs Claude to call `discover_and_fetch_docs` for each runtime dependency. Fully self-contained — no WebSearch or WebFetch needed.
 
 ### TEI backend
 
@@ -36,14 +36,28 @@ The `search_docs` tool in `src/search.ts` runs:
 3. **RRF fusion** — Reciprocal Rank Fusion (k=60) merges both ranked lists
 4. **Cross-encoder rerank** — `cross-encoder/ms-marco-MiniLM-L-6-v2` via TEI rescores top 30 candidates
 
+### Doc discovery pipeline
+
+The `discover_and_fetch_docs` tool (Tool 7) in `src/discovery.ts` makes the server self-contained:
+
+1. **npm registry lookup** — `registry.npmjs.org/{lib}/latest` → homepage, repository URL, version
+2. **Candidate URL generation** — ordered probe list: `{homepage}/llms-full.txt`, `{homepage}/llms.txt`, `docs.{domain}/llms-full.txt`, GitHub raw (main + master branches), homepage HTML fallback
+3. **Sequential probing** — fetches each candidate with 15s timeout, stops on first success
+4. **Index detection** — if the content is a link-heavy file (>50% link lines, 5+ links), it's treated as an index
+5. **Index expansion** — fetches each linked page (concurrency 5, 200ms inter-request delay, max 100 links), converts HTML → markdown via turndown, prepends heading context
+6. **HTML → markdown** — turndown with GFM plugin; extracts `<main>`/`<article>` content, strips nav/footer/header/script/style/aside
+
+Dependencies: `turndown` and `turndown-plugin-gfm` for HTML conversion.
+
 ### Key files
 
-- `src/index.ts` — MCP server entry. All 6 tool definitions with `server.registerTool()` and Zod schemas.
+- `src/index.ts` — MCP server entry. All 7 tool definitions with `server.registerTool()` and Zod schemas.
+- `src/discovery.ts` — Self-contained doc discovery: npm registry, URL probing, index detection/expansion, HTML→markdown conversion.
 - `src/indexer.ts` — Markdown chunking (heading-based + overlap, 1500 char chunks) and embedding generation via TEI HTTP.
 - `src/search.ts` — Full search pipeline. LanceDB native FTS for BM25. RRF fusion and orchestration.
 - `src/reranker.ts` — Cross-encoder reranking via TEI HTTP.
 - `src/store.ts` — LanceDB connection management, FTS index creation, metadata persistence, raw doc storage.
-- `src/fetcher.ts` — Raw HTTP fetch for documentation URLs. No AI processing, no truncation. Used by `fetch_and_store_doc`.
+- `src/fetcher.ts` — Raw HTTP fetch for documentation URLs. Supports configurable timeout (`timeoutMs` option) and returns `finalUrl` after redirects.
 - `src/workspace.ts` — Monorepo detection (pnpm/npm/yarn workspaces), pnpm catalog resolution, cross-workspace dependency collection.
 - `src/types.ts` — Shared interfaces: `DocRow`, `SearchResult`, `DocMetadata`, `Dependency`, `AnalyzeResult`, etc.
 - `docker-compose.yml` — TEI containers (uses `${TEI_TAG:-cpu-1.9}`). `docker-compose.nvidia.yml` — NVIDIA GPU device passthrough.
@@ -80,6 +94,7 @@ Per-project at `{project}/.claude/docs/`:
 - Chunk IDs are auto-incrementing integers, unique across all libraries.
 - Tools are registered via `server.registerTool()` (not the deprecated `server.tool()`).
 - Dependencies are tagged as `runtime` or `dev`. The `/fetch-docs` command skips dev deps by default.
+- `discover_and_fetch_docs` is fully self-contained — no WebSearch or WebFetch needed. It queries npm, probes for llms.txt, detects index files, expands them, and converts HTML to markdown.
 
 ## Monorepo support
 
