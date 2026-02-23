@@ -1,0 +1,5 @@
+{
+  "name": "claude-local-docs",
+  "description": "Local-first documentation indexer with semantic search. Analyzes project dependencies, fetches docs (preferring llms.txt), and provides fast local search via embeddings.",
+  "version": "1.0.0"
+}

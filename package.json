@@ -1,0 +1,22 @@
+{
+  "name": "claude-local-docs",
+  "version": "1.0.0",
+  "description": "Local-first documentation indexer and semantic search for JS/TS projects",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@huggingface/transformers": "^3.4.1",
+    "@lancedb/lancedb": "^0.17.0",
+    "minisearch": "^7.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
