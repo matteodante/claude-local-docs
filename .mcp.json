@@ -1,6 +1,12 @@
 {
-  "local-docs": {
-    "command": "npx",
-    "args": ["-y", "claude-local-docs"]
+  "mcpServers": {
+    "local-docs": {
+      "command": "npx",
+      "args": ["-y", "@matteodante/claude-local-docs"],
+      "env": {
+        "TEI_EMBED_URL": "http://localhost:39281",
+        "TEI_RERANK_URL": "http://localhost:39282"
+      }
+    }
   }
 }

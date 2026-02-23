@@ -1,21 +1,7 @@
 import type { DocRow } from "./types.js";
 
-// Lazy-loaded pipeline
-let embedPipeline: any = null;
-let layerNormFn: any = null;
-
-const MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5";
-const MATRYOSHKA_DIM = 384; // Use 384-dim slice for speed; can bump to 768 for max accuracy
-
-async function getEmbedPipeline() {
-  if (embedPipeline) return { pipe: embedPipeline, layerNorm: layerNormFn };
-  const transformers = await import("@huggingface/transformers");
-  embedPipeline = await transformers.pipeline("feature-extraction", MODEL_NAME, {
-    dtype: "q8",
-  });
-  layerNormFn = transformers.layer_norm;
-  return { pipe: embedPipeline, layerNorm: layerNormFn };
-}
+const TEI_EMBED_URL = process.env.TEI_EMBED_URL ?? "http://localhost:39281";
+const MATRYOSHKA_DIM = 384;
 
 /**
  * Semantic chunking: split markdown by headings, then split large sections
@@ -106,33 +92,38 @@ function splitWithOverlap(
 }
 
 /**
- * Generate embeddings using nomic-embed-text-v1.5.
- * Uses Matryoshka dimensionality reduction to MATRYOSHKA_DIM.
- * Prefixes text with task type for better accuracy.
+ * Generate embeddings via TEI (Text Embeddings Inference).
+ * Uses Matryoshka dimensionality reduction to 384 dims + L2 normalize.
+ * Prefixes text with task type for better accuracy (required by nomic).
  */
 export async function embedTexts(
   texts: string[],
   taskType: "search_document" | "search_query" = "search_document"
 ): Promise<number[][]> {
-  const { pipe, layerNorm } = await getEmbedPipeline();
+  const prefixed = texts.map((t) => `${taskType}: ${t}`);
   const embeddings: number[][] = [];
 
-  // Prefix each text with the task type as required by nomic
-  const prefixed = texts.map((t) => `${taskType}: ${t}`);
-
-  // Process in batches
-  const batchSize = 64;
+  // Process in batches to stay within TEI request size limits
+  const batchSize = 32;
   for (let i = 0; i < prefixed.length; i += batchSize) {
     const batch = prefixed.slice(i, i + batchSize);
-    const raw = await pipe(batch, { pooling: "mean" });
 
-    // Apply layer norm + Matryoshka truncation + L2 normalize
-    const normed = layerNorm(raw, [raw.dims[1]]);
-    const truncated = normed.slice(null, [0, MATRYOSHKA_DIM]);
-    const normalized = truncated.normalize(2, -1);
+    const res = await fetch(`${TEI_EMBED_URL}/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inputs: batch, truncate: true }),
+    });
+    if (!res.ok) {
+      throw new Error(`TEI embed error: ${res.status} ${await res.text()}`);
+    }
 
-    for (let j = 0; j < batch.length; j++) {
-      embeddings.push(Array.from(normalized[j].data as Float32Array));
+    const fullVecs: number[][] = await res.json();
+
+    // Matryoshka truncation to 384 dims + L2 normalize
+    for (const vec of fullVecs) {
+      const truncated = vec.slice(0, MATRYOSHKA_DIM);
+      const norm = Math.sqrt(truncated.reduce((s, v) => s + v * v, 0));
+      embeddings.push(truncated.map((v) => v / (norm || 1)));
     }
   }
 

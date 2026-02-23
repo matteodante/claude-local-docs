@@ -1,0 +1,14 @@
+services:
+  tei-embed:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+  tei-rerank:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

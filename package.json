@@ -1,7 +1,7 @@
 {
-  "name": "claude-local-docs",
-  "version": "1.0.4",
-  "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline. All models run locally via ONNX.",
+  "name": "@matteodante/claude-local-docs",
+  "version": "1.0.5",
+  "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline. Uses TEI (Text Embeddings Inference) Docker containers for embeddings and reranking.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -10,8 +10,13 @@
   "files": [
     "dist",
     "commands",
+    "hooks",
+    "scripts",
     ".claude-plugin",
     ".mcp.json",
+    "docker-compose.yml",
+    "docker-compose.nvidia.yml",
+    "start-tei.sh",
     "README.md",
     "LICENSE"
   ],
@@ -35,12 +40,14 @@
   ],
   "author": "matthew",
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/matteodante/claude-local-docs.git"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.4.1",
     "@lancedb/lancedb": "^0.17.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "zod": "^3.24.0"

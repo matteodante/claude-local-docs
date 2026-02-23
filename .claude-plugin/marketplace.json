@@ -1,22 +1,42 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-local-docs",
-  "description": "A local-first Context7 alternative. Indexes your JS/TS project dependency docs locally with a 4-stage RAG pipeline (vector + BM25 + RRF + cross-encoder reranking). No cloud APIs at query time — all models run on your machine.",
+  "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline. GPU-accelerated via TEI Docker containers.",
   "owner": {
-    "name": "matthew"
+    "name": "matthew",
+    "email": "matteodante@users.noreply.github.com"
+  },
+  "metadata": {
+    "version": "1.0.5"
   },
   "plugins": [
     {
       "name": "claude-local-docs",
-      "description": "A local-first, offline-capable alternative to Context7 for dependency documentation. Reads your package.json, fetches docs (preferring llms.txt), and indexes them with a production-grade 4-stage RAG pipeline: vector search + BM25 keywords + RRF fusion + cross-encoder reranking. All models (nomic-embed-text-v1.5, ms-marco-MiniLM) run locally via ONNX — no cloud API calls at query time, no rate limits, full privacy.",
-      "version": "1.0.0",
+      "description": "Offline-capable documentation search for JS/TS projects. Reads your package.json, fetches docs (preferring llms.txt), and indexes them with a 4-stage RAG pipeline: vector search + BM25 keywords + RRF fusion + cross-encoder reranking. Embeddings and reranking run via TEI (HuggingFace Text Embeddings Inference) Docker containers with auto GPU detection (NVIDIA CUDA, Apple Metal).",
+      "version": "1.0.5",
       "author": {
         "name": "matthew"
       },
       "source": "./",
       "category": "development",
       "license": "MIT",
-      "keywords": ["documentation", "search", "rag", "embeddings", "local-first", "semantic-search", "llms-txt", "context7-alternative", "offline", "vector-search", "bm25", "reranking", "dependency-docs"]
+      "keywords": [
+        "documentation",
+        "search",
+        "rag",
+        "embeddings",
+        "local-first",
+        "semantic-search",
+        "llms-txt",
+        "context7-alternative",
+        "offline",
+        "vector-search",
+        "bm25",
+        "reranking",
+        "dependency-docs",
+        "docker",
+        "tei"
+      ]
     }
   ]
 }

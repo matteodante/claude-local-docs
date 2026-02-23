@@ -1,0 +1,20 @@
+services:
+  tei-embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:${TEI_TAG:-cpu-1.9}
+    command: --model-id nomic-ai/nomic-embed-text-v1.5 --port 80 --max-client-batch-size 64
+    ports:
+      - "39281:80"
+    volumes:
+      - tei-embed-cache:/data
+
+  tei-rerank:
+    image: ghcr.io/huggingface/text-embeddings-inference:${TEI_TAG:-cpu-1.9}
+    command: --model-id cross-encoder/ms-marco-MiniLM-L-6-v2 --port 80
+    ports:
+      - "39282:80"
+    volumes:
+      - tei-rerank-cache:/data
+
+volumes:
+  tei-embed-cache:
+  tei-rerank-cache:

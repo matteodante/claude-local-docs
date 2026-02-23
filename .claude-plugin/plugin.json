@@ -1,8 +1,29 @@
 {
   "name": "claude-local-docs",
-  "description": "A local-first Context7 alternative. Indexes JS/TS dependency docs with a 4-stage RAG pipeline (vector + BM25 + reranking). All models run locally — no cloud APIs at query time.",
-  "version": "1.0.0",
+  "version": "1.0.5",
+  "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline (vector + BM25 + RRF + cross-encoder reranking). Uses TEI Docker containers for GPU-accelerated embeddings and reranking.",
   "author": {
-    "name": "matthew"
-  }
+    "name": "matthew",
+    "url": "https://github.com/matteodante"
+  },
+  "homepage": "https://github.com/matteodante/claude-local-docs",
+  "repository": "https://github.com/matteodante/claude-local-docs",
+  "license": "MIT",
+  "keywords": [
+    "documentation",
+    "search",
+    "rag",
+    "embeddings",
+    "local-first",
+    "semantic-search",
+    "llms-txt",
+    "context7-alternative",
+    "offline",
+    "vector-search",
+    "bm25",
+    "reranking",
+    "dependency-docs",
+    "docker",
+    "tei"
+  ]
 }
