@@ -282,7 +282,7 @@ server.registerTool(
   "fetch_and_store_doc",
   {
     description:
-      "Fetch documentation from a URL (raw HTTP, no AI processing or truncation) and index it. Use this for llms.txt and llms-full.txt URLs to preserve full content. Handles up to 5MB, 30s timeout.",
+      "Fetch documentation from a URL (raw HTTP, no AI processing or truncation) and index it. Use this for llms.txt and llms-full.txt URLs to preserve full content. Handles up to 200MB, 120s timeout.",
     inputSchema: {
       library: z.string().describe("Library name (e.g. 'react', '@tanstack/query')"),
       version: z.string().describe("Library version"),

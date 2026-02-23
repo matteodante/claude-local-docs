@@ -3,8 +3,8 @@
  * No AI processing, no truncation — returns full text as-is.
  */
 
-const TIMEOUT_MS = 30_000;
-const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+const TIMEOUT_MS = 120_000;
+const MAX_SIZE = 200 * 1024 * 1024; // 200MB
 
 export type FetchResult =
   | { ok: true; content: string; byteLength: number; contentType: string }
