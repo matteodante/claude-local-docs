@@ -1,23 +1,53 @@
 {
   "name": "claude-local-docs",
   "version": "1.0.0",
-  "description": "Local-first documentation indexer and semantic search for JS/TS projects",
+  "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline. All models run locally via ONNX.",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "claude-local-docs": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "commands",
+    ".claude-plugin",
+    ".mcp.json",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "postinstall": "tsc"
+    "prepublishOnly": "tsc"
+  },
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "documentation",
+    "search",
+    "rag",
+    "embeddings",
+    "context7-alternative",
+    "local-first",
+    "semantic-search",
+    "llms-txt"
+  ],
+  "author": "matthew",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/matteodante/claude-local-docs.git"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
     "@huggingface/transformers": "^3.4.1",
     "@lancedb/lancedb": "^0.17.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
     "minisearch": "^7.1.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.27.3",
     "typescript": "^5.7.0"
   }
 }

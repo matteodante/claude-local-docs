@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "local-docs": {
-      "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "claude-local-docs"],
       "type": "stdio"
     }
   }
