@@ -1,6 +1,6 @@
 {
   "name": "claude-local-docs",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline. All models run locally via ONNX.",
   "type": "module",
   "main": "dist/index.js",
