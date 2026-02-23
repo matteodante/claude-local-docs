@@ -1,5 +1,6 @@
 ---
 description: "Fetch and index documentation for all project dependencies"
+allowed-tools: ["mcp__local-docs__analyze_dependencies", "mcp__local-docs__list_docs", "mcp__local-docs__store_and_index_doc", "WebFetch", "WebSearch"]
 ---
 
 # Fetch Documentation for Project Dependencies

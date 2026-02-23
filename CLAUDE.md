@@ -2,7 +2,7 @@
 
 ## What this project is
 
-A Claude Code plugin that provides local-first documentation search for JS/TS projects. It reads `package.json` to detect dependencies, fetches their docs (preferring `llms.txt`), and indexes them locally with an advanced RAG search pipeline.
+A local-first alternative to Context7 for Claude Code. Provides offline-capable documentation search for JS/TS projects. It reads `package.json` to detect dependencies, fetches their docs (preferring `llms.txt`), and indexes them locally with an advanced RAG search pipeline. All models run on your machine via ONNX — no cloud APIs at query time.
 
 ## Architecture
 

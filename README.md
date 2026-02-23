@@ -1,6 +1,19 @@
 # claude-local-docs
 
-A Claude Code plugin that indexes your project's dependency documentation locally and provides production-grade semantic search — no external APIs at query time.
+A local-first alternative to Context7 for Claude Code. Indexes your project's dependency documentation locally and provides production-grade semantic search — no cloud APIs at query time, no rate limits, full privacy.
+
+## Why not Context7?
+
+| | **claude-local-docs** | **Context7** |
+|---|---|---|
+| **Runs where** | Your machine (ONNX models) | Upstash cloud servers |
+| **Privacy** | Docs never leave your machine | Queries sent to cloud API |
+| **Rate limits** | None | API-dependent |
+| **Offline** | Full search works offline | Requires internet |
+| **Search quality** | 4-stage RAG (vector + BM25 + RRF + cross-encoder reranking) | Single-stage retrieval |
+| **Doc sources** | Prefers llms.txt, falls back to official docs | Pre-indexed source repos |
+| **Scope** | Your project's actual dependencies | Any library |
+| **Setup** | `npm install` + `/fetch-docs` | Install plugin |
 
 ## How it works
 
@@ -152,7 +165,8 @@ npx @modelcontextprotocol/inspector node dist/index.js
 ```
 claude-local-docs/
 ├── .claude-plugin/
-│   └── plugin.json         # Plugin manifest
+│   ├── plugin.json         # Plugin manifest
+│   └── marketplace.json    # Marketplace listing
 ├── .mcp.json               # MCP server config (stdio transport)
 ├── commands/
 │   └── fetch-docs.md       # /fetch-docs command — Claude as research agent
@@ -163,6 +177,7 @@ claude-local-docs/
 │   ├── reranker.ts          # Cross-encoder (ms-marco-MiniLM-L-6-v2)
 │   ├── store.ts             # LanceDB storage + metadata persistence
 │   └── types.ts             # Shared TypeScript interfaces
+├── LICENSE
 ├── package.json
 └── tsconfig.json
 ```

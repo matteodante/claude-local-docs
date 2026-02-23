@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-local-docs",
+  "description": "A local-first Context7 alternative. Indexes your JS/TS project dependency docs locally with a 4-stage RAG pipeline (vector + BM25 + RRF + cross-encoder reranking). No cloud APIs at query time — all models run on your machine.",
+  "owner": {
+    "name": "matthew"
+  },
+  "plugins": [
+    {
+      "name": "claude-local-docs",
+      "description": "A local-first, offline-capable alternative to Context7 for dependency documentation. Reads your package.json, fetches docs (preferring llms.txt), and indexes them with a production-grade 4-stage RAG pipeline: vector search + BM25 keywords + RRF fusion + cross-encoder reranking. All models (nomic-embed-text-v1.5, ms-marco-MiniLM) run locally via ONNX — no cloud API calls at query time, no rate limits, full privacy.",
+      "version": "1.0.0",
+      "author": {
+        "name": "matthew"
+      },
+      "source": ".",
+      "category": "development",
+      "license": "MIT",
+      "keywords": ["documentation", "search", "rag", "embeddings", "local-first", "semantic-search", "llms-txt", "context7-alternative", "offline", "vector-search", "bm25", "reranking", "dependency-docs"]
+    }
+  ]
+}

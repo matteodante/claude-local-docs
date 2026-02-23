@@ -1,5 +1,8 @@
 {
   "name": "claude-local-docs",
-  "description": "Local-first documentation indexer with semantic search. Analyzes project dependencies, fetches docs (preferring llms.txt), and provides fast local search via embeddings.",
-  "version": "1.0.0"
+  "description": "A local-first Context7 alternative. Indexes JS/TS dependency docs with a 4-stage RAG pipeline (vector + BM25 + reranking). All models run locally — no cloud APIs at query time.",
+  "version": "1.0.0",
+  "author": {
+    "name": "matthew"
+  }
 }
