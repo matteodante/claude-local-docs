@@ -1,9 +1,6 @@
 {
-  "mcpServers": {
-    "local-docs": {
-      "command": "npx",
-      "args": ["-y", "claude-local-docs"],
-      "type": "stdio"
-    }
+  "local-docs": {
+    "command": "npx",
+    "args": ["-y", "claude-local-docs"]
   }
 }
