@@ -3,7 +3,10 @@
     "local-docs": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"],
-      "type": "stdio"
+      "type": "stdio",
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "."
+      }
     }
   }
 }
