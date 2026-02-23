@@ -13,7 +13,7 @@
       "author": {
         "name": "matthew"
       },
-      "source": ".",
+      "source": "./",
       "category": "development",
       "license": "MIT",
       "keywords": ["documentation", "search", "rag", "embeddings", "local-first", "semantic-search", "llms-txt", "context7-alternative", "offline", "vector-search", "bm25", "reranking", "dependency-docs"]
