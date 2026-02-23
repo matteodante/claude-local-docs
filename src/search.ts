@@ -1,52 +1,15 @@
 /**
  * Advanced RAG search pipeline:
  *   1. Vector search (LanceDB) — semantic similarity
- *   2. BM25 search (MiniSearch) — keyword/exact match
+ *   2. BM25 search (LanceDB native FTS) — keyword/exact match
  *   3. Reciprocal Rank Fusion — merge both ranked lists
  *   4. Cross-encoder rerank — rescore top candidates
  */
 
-import MiniSearch from "minisearch";
 import type { SearchResult, DocRow } from "./types.js";
 import type { DocStore } from "./store.js";
 import { embedTexts } from "./indexer.js";
 import { rerank, type RerankCandidate } from "./reranker.js";
-
-// --- BM25 index (lazy-built, cached per session) ---
-
-let bm25Index: MiniSearch | null = null;
-let bm25IndexedCount = 0;
-
-async function getBM25Index(store: DocStore): Promise<MiniSearch> {
-  const allChunks = await store.getChunks();
-
-  // Rebuild if chunk count changed (new docs indexed)
-  if (bm25Index && bm25IndexedCount === allChunks.length) {
-    return bm25Index;
-  }
-
-  bm25Index = new MiniSearch({
-    fields: ["text"],
-    storeFields: ["id", "library", "headingPath", "text"],
-    searchOptions: {
-      boost: { text: 1 },
-      fuzzy: 0.2,
-      prefix: true,
-    },
-  });
-
-  // MiniSearch needs objects with a unique `id` field
-  const docs = allChunks.map((chunk: DocRow) => ({
-    id: chunk.id,
-    library: chunk.library,
-    headingPath: chunk.headingPath,
-    text: chunk.text,
-  }));
-
-  bm25Index.addAll(docs);
-  bm25IndexedCount = allChunks.length;
-  return bm25Index;
-}
 
 // --- Reciprocal Rank Fusion ---
 
@@ -127,18 +90,13 @@ export async function searchDocs(
     headingPath: row.headingPath,
   }));
 
-  // Step 2: BM25 search via MiniSearch
-  const index = await getBM25Index(store);
-  const bm25Options: any = {};
-  if (options?.library) {
-    bm25Options.filter = (result: any) => result.library === options.library;
-  }
-  const bm25Hits = index.search(query, bm25Options).slice(0, candidateCount);
-  const bm25Ranked: RankedDoc[] = bm25Hits.map((hit: any) => ({
-    id: hit.id,
-    text: hit.text,
-    library: hit.library,
-    headingPath: hit.headingPath,
+  // Step 2: BM25 search via LanceDB native FTS
+  const ftsHits = await store.ftsSearch(query, candidateCount, options?.library);
+  const bm25Ranked: RankedDoc[] = ftsHits.map((row: DocRow) => ({
+    id: row.id,
+    text: row.text,
+    library: row.library,
+    headingPath: row.headingPath,
   }));
 
   // Step 3: RRF fusion (k=60, BM25 weight=1.0, vector weight=0.7)

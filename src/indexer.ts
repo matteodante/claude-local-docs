@@ -33,7 +33,7 @@ export function chunkMarkdown(
     const trimmed = currentText.trim();
     if (trimmed.length > 0) {
       const headingPath = headingStack.map((h) => h.text);
-      const subChunks = splitWithOverlap(trimmed, 2000, 200);
+      const subChunks = splitWithOverlap(trimmed, 1500, 200);
       for (const sub of subChunks) {
         chunks.push({
           library,

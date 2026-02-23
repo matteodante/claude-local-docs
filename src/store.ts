@@ -120,6 +120,9 @@ export class DocStore {
     }
     await this.saveMetadata(metadata);
 
+    // Rebuild FTS index after adding new rows
+    await this.createFtsIndex();
+
     // Count total rows
     const totalRows = table
       ? (await table.countRows())
@@ -178,6 +181,33 @@ export class DocStore {
       const path = JSON.parse(c.headingPath) as string[];
       return path.some((h) => h.toLowerCase().includes(lowerHeading));
     });
+  }
+
+  /** Create BM25 full-text search index on the text column. Safe to call repeatedly (replace=true). */
+  async createFtsIndex(): Promise<void> {
+    const table = await this.getTable();
+    if (!table) return;
+    const lancedb = await import("@lancedb/lancedb");
+    await table.createIndex("text", {
+      config: lancedb.Index.fts({ stem: true, lowercase: true, removeStopWords: true }),
+      replace: true,
+    });
+  }
+
+  /** BM25 full-text search using LanceDB native FTS index. */
+  async ftsSearch(query: string, limit: number, library?: string): Promise<DocRow[]> {
+    const table = await this.getTable();
+    if (!table) return [];
+    try {
+      let q = table.query().fullTextSearch(query, { columns: ["text"] }).limit(limit);
+      if (library) {
+        q = q.where(`library = '${library.replace(/'/g, "''")}'`);
+      }
+      return await q.toArray();
+    } catch {
+      // FTS index doesn't exist yet (first search before any docs indexed)
+      return [];
+    }
   }
 
   async isEmpty(): Promise<boolean> {

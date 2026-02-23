@@ -42,7 +42,6 @@
     "@huggingface/transformers": "^3.4.1",
     "@lancedb/lancedb": "^0.17.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "minisearch": "^7.1.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {

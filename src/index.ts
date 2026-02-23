@@ -7,6 +7,8 @@ import { z } from "zod";
 import { DocStore, resolveProjectRoot } from "./store.js";
 import { indexDocument } from "./indexer.js";
 import { searchDocs } from "./search.js";
+import { analyzeDependencies } from "./workspace.js";
+import { fetchDocContent } from "./fetcher.js";
 import type { Dependency } from "./types.js";
 
 const projectRoot = resolveProjectRoot();
@@ -18,30 +20,36 @@ const server = new McpServer({
 });
 
 // --- Tool 1: analyze_dependencies ---
-server.tool(
+server.registerTool(
   "analyze_dependencies",
-  "Read package.json and return all dependencies with their versions",
-  { packageJsonPath: z.string().optional().describe("Path to package.json. Defaults to the project root.") },
+  {
+    description:
+      "Analyze project dependencies. Detects monorepos (pnpm workspaces, npm/yarn workspaces), resolves catalog: versions, collects deps from all workspace packages, and deduplicates. Returns deps tagged as runtime/dev plus monorepo info.",
+    inputSchema: {
+      packageJsonPath: z
+        .string()
+        .optional()
+        .describe("Path to package.json or project root. Defaults to the project root."),
+    },
+  },
   async ({ packageJsonPath }) => {
     try {
-      const pkgPath = packageJsonPath ?? join(projectRoot, "package.json");
-      const raw = await readFile(pkgPath, "utf-8");
-      const pkg = JSON.parse(raw);
+      const root = packageJsonPath
+        ? packageJsonPath.endsWith("package.json")
+          ? join(packageJsonPath, "..")
+          : packageJsonPath
+        : projectRoot;
 
-      const deps: Dependency[] = [];
-      for (const [name, version] of Object.entries(pkg.dependencies ?? {})) {
-        deps.push({ name, version: version as string });
-      }
-      for (const [name, version] of Object.entries(pkg.devDependencies ?? {})) {
-        deps.push({ name, version: version as string });
-      }
+      const result = await analyzeDependencies(root);
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(deps, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
     } catch (err: any) {
       return {
-        content: [{ type: "text" as const, text: `Error reading package.json: ${err.message}` }],
+        content: [
+          { type: "text" as const, text: `Error analyzing dependencies: ${err.message}` },
+        ],
         isError: true,
       };
     }
@@ -49,14 +57,16 @@ server.tool(
 );
 
 // --- Tool 2: store_and_index_doc ---
-server.tool(
+server.registerTool(
   "store_and_index_doc",
-  "Store and index documentation for a library. Chunks markdown, generates embeddings via nomic-embed-text-v1.5, and persists to LanceDB in .claude/docs/",
   {
-    library: z.string().describe("Library name (e.g. 'react', '@tanstack/query')"),
-    version: z.string().describe("Library version"),
-    content: z.string().describe("Raw markdown documentation content"),
-    sourceUrl: z.string().describe("URL where the docs were fetched from"),
+    description: "Store and index documentation for a library. Chunks markdown, generates embeddings via nomic-embed-text-v1.5, and persists to LanceDB in .claude/docs/",
+    inputSchema: {
+      library: z.string().describe("Library name (e.g. 'react', '@tanstack/query')"),
+      version: z.string().describe("Library version"),
+      content: z.string().describe("Raw markdown documentation content"),
+      sourceUrl: z.string().describe("URL where the docs were fetched from"),
+    },
   },
   async ({ library, version, content, sourceUrl }) => {
     try {
@@ -93,13 +103,15 @@ server.tool(
 );
 
 // --- Tool 3: search_docs ---
-server.tool(
+server.registerTool(
   "search_docs",
-  "Advanced RAG search: BM25 keyword search + vector similarity → RRF fusion → cross-encoder reranking. Uses nomic-embed-text-v1.5 for embeddings and ms-marco-MiniLM for reranking.",
   {
-    query: z.string().describe("Search query"),
-    library: z.string().optional().describe("Filter results to a specific library"),
-    topK: z.number().optional().describe("Number of results to return (default: 10)"),
+    description: "Advanced RAG search: BM25 keyword search + vector similarity → RRF fusion → cross-encoder reranking. Uses nomic-embed-text-v1.5 for embeddings and ms-marco-MiniLM for reranking.",
+    inputSchema: {
+      query: z.string().describe("Search query"),
+      library: z.string().optional().describe("Filter results to a specific library"),
+      topK: z.number().optional().describe("Number of results to return (default: 10)"),
+    },
   },
   async ({ query, library, topK }) => {
     try {
@@ -140,10 +152,11 @@ server.tool(
 );
 
 // --- Tool 4: list_docs ---
-server.tool(
+server.registerTool(
   "list_docs",
-  "List all indexed documentation libraries with metadata",
-  {},
+  {
+    description: "List all indexed documentation libraries with metadata",
+  },
   async () => {
     try {
       const metadata = await store.loadMetadata();
@@ -173,13 +186,15 @@ server.tool(
 );
 
 // --- Tool 5: get_doc_section ---
-server.tool(
+server.registerTool(
   "get_doc_section",
-  "Retrieve specific documentation chunks by library + heading or chunk ID",
   {
-    library: z.string().describe("Library name"),
-    heading: z.string().optional().describe("Heading text to search for in the heading path"),
-    chunkId: z.number().optional().describe("Specific chunk ID to retrieve"),
+    description: "Retrieve specific documentation chunks by library + heading or chunk ID",
+    inputSchema: {
+      library: z.string().describe("Library name"),
+      heading: z.string().optional().describe("Heading text to search for in the heading path"),
+      chunkId: z.number().optional().describe("Specific chunk ID to retrieve"),
+    },
   },
   async ({ library, heading, chunkId }) => {
     try {
@@ -256,6 +271,72 @@ server.tool(
     } catch (err: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Tool 6: fetch_and_store_doc ---
+server.registerTool(
+  "fetch_and_store_doc",
+  {
+    description:
+      "Fetch documentation from a URL (raw HTTP, no AI processing or truncation) and index it. Use this for llms.txt and llms-full.txt URLs to preserve full content. Handles up to 5MB, 30s timeout.",
+    inputSchema: {
+      library: z.string().describe("Library name (e.g. 'react', '@tanstack/query')"),
+      version: z.string().describe("Library version"),
+      url: z.string().describe("URL to fetch documentation from (e.g. llms-full.txt URL)"),
+    },
+  },
+  async ({ library, version, url }) => {
+    try {
+      // Fetch raw content
+      const fetchResult = await fetchDocContent(url);
+      if (!fetchResult.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ success: false, error: fetchResult.error }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Save raw doc
+      await store.saveRawDoc(library, fetchResult.content);
+
+      // Chunk and embed
+      const chunks = await indexDocument(fetchResult.content, library);
+
+      // Store in LanceDB
+      const result = await store.addLibrary(library, version, url, chunks);
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              success: true,
+              library,
+              chunkCount: result.chunkCount,
+              byteLength: fetchResult.byteLength,
+              totalIndexSize: result.indexSize,
+              storedAt: store.getDocsDir(),
+            }),
+          },
+        ],
+      };
+    } catch (err: any) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: false, error: err.message }),
+          },
+        ],
         isError: true,
       };
     }

@@ -14,6 +14,7 @@ A local-first alternative to Context7 for Claude Code. Indexes your project's de
 | **Doc sources** | Prefers llms.txt, falls back to official docs | Pre-indexed source repos |
 | **Scope** | Your project's actual dependencies | Any library |
 | **Setup** | `npm install` + `/fetch-docs` | Install plugin |
+| **Monorepo** | Detects pnpm/npm/yarn workspaces, resolves catalogs | N/A |
 
 ## How it works
 
@@ -21,18 +22,18 @@ A local-first alternative to Context7 for Claude Code. Indexes your project's de
 /fetch-docs                        search_docs("how to use useState")
      │                                       │
      ▼                                       ▼
- Read package.json              ┌─── Vector search (LanceDB) ───┐
-     │                          │    nomic-embed-text-v1.5       │
-     ▼                          │                                │
- For each dependency:           │                                ├─→ RRF Fusion
-   - Search web for llms.txt    │                                │    (k=60)
-   - Fetch best docs            ├─── BM25 search (MiniSearch) ──┘
-   - Chunk + embed + store      │    keyword + fuzzy match         │
-                                │                                  ▼
-                                │                        Cross-encoder rerank
-                                │                        ms-marco-MiniLM-L-6-v2
-                                │                                  │
-                                └──────────────────────────────────┘
+ Detect monorepo              ┌─── Vector search (LanceDB) ───┐
+ Scan all workspace pkgs      │    nomic-embed-text-v1.5       │
+ Resolve catalog: versions    │                                │
+     │                        │                                ├─→ RRF Fusion
+     ▼                        │                                │    (k=60)
+ For each runtime dep:        ├── BM25 search (LanceDB FTS) ──┘
+   - Search for llms.txt      │    keyword + stemming            │
+   - Raw fetch (no truncation)│                                  ▼
+   - Chunk + embed + store    │                        Cross-encoder rerank
+                              │                        ms-marco-MiniLM-L-6-v2
+                              │                                  │
+                              └──────────────────────────────────┘
                                                   │
                                                   ▼
                                           Top-K results
@@ -60,7 +61,7 @@ Or install as a project-local plugin by cloning into your project and referencin
 /fetch-docs
 ```
 
-Claude reads your `package.json`, searches the web for the best documentation for each dependency (preferring `llms.txt` / `llms-full.txt`), and indexes everything locally.
+Claude analyzes your project (including monorepo workspaces), finds all runtime dependencies, searches the web for the best documentation for each one (preferring `llms-full.txt` > `llms.txt` > official docs), and indexes everything locally. Progress is reported one library at a time.
 
 ### 2. Search
 
@@ -76,7 +77,8 @@ Show me the API for zod's .refine()
 
 - **`list_docs`** — See what's indexed, when it was fetched, chunk counts
 - **`get_doc_section`** — Retrieve specific sections by heading or chunk ID
-- **`analyze_dependencies`** — List all deps from package.json
+- **`analyze_dependencies`** — List all deps (monorepo-aware, catalog-resolved, runtime/dev tagged)
+- **`fetch_and_store_doc`** — Fetch a URL and index it directly (no AI truncation)
 
 ## Search pipeline
 
@@ -85,7 +87,7 @@ This plugin implements a 4-stage advanced RAG pipeline, the current production s
 | Stage | Technology | Purpose |
 |---|---|---|
 | **Vector search** | LanceDB + nomic-embed-text-v1.5 | Semantic similarity (understands meaning) |
-| **BM25 search** | MiniSearch (BM25+ algorithm) | Keyword matching (exact terms like `useEffect`) |
+| **BM25 search** | LanceDB native FTS (BM25, stemming, stop words) | Keyword matching (exact terms like `useEffect`) |
 | **RRF fusion** | Reciprocal Rank Fusion (k=60) | Merges both ranked lists, handles different score scales |
 | **Cross-encoder rerank** | ms-marco-MiniLM-L-6-v2 | Rescores top 30 candidates with deep relevance model |
 
@@ -107,7 +109,7 @@ All models run locally via ONNX. Downloaded once on first use, then cached.
 ## Chunking strategy
 
 - Split markdown by headings (`##`, `###`, `####`) preserving the heading path
-- Target ~2000 characters per chunk
+- Target ~1500 characters per chunk
 - 10% overlap between chunks to prevent losing context at boundaries
 - Large sections split at paragraph boundaries
 
@@ -129,8 +131,9 @@ your-project/.claude/docs/
 
 | Tool | Description |
 |---|---|
-| `analyze_dependencies` | Read package.json, return all deps with versions |
+| `analyze_dependencies` | Monorepo-aware dep analysis: detects workspaces, resolves catalog versions, tags runtime/dev |
 | `store_and_index_doc` | Receive markdown, chunk, embed, store in LanceDB |
+| `fetch_and_store_doc` | Fetch URL directly (raw HTTP, no truncation), then chunk + embed + store |
 | `search_docs` | Full RAG pipeline: vector + BM25 + RRF + rerank |
 | `list_docs` | List indexed libraries with metadata |
 | `get_doc_section` | Get specific chunks by library + heading or chunk ID |
@@ -141,11 +144,12 @@ All open source:
 
 | Package | License | Purpose |
 |---|---|---|
-| `@lancedb/lancedb` | Apache 2.0 | Embedded vector database |
+| `@lancedb/lancedb` | Apache 2.0 | Embedded vector database + native FTS |
 | `@huggingface/transformers` | Apache 2.0 | Run ONNX models locally |
-| `minisearch` | MIT | BM25+ full-text search |
 | `@modelcontextprotocol/sdk` | MIT | MCP server framework |
 | `zod` | MIT | Schema validation |
+
+No additional dependencies were added for monorepo support or HTTP fetching — everything uses Node built-ins.
 
 ## Development
 
@@ -171,11 +175,13 @@ claude-local-docs/
 ├── commands/
 │   └── fetch-docs.md       # /fetch-docs command — Claude as research agent
 ├── src/
-│   ├── index.ts            # MCP server entry, 5 tool definitions
+│   ├── index.ts            # MCP server entry, 6 tool definitions
 │   ├── indexer.ts           # Chunking + nomic-embed-text-v1.5 embeddings
 │   ├── search.ts            # 4-stage pipeline: vector + BM25 + RRF + rerank
 │   ├── reranker.ts          # Cross-encoder (ms-marco-MiniLM-L-6-v2)
 │   ├── store.ts             # LanceDB storage + metadata persistence
+│   ├── fetcher.ts           # Raw HTTP fetch (no AI truncation)
+│   ├── workspace.ts         # Monorepo detection + pnpm catalog + dep collection
 │   └── types.ts             # Shared TypeScript interfaces
 ├── LICENSE
 ├── package.json

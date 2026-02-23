@@ -1,6 +1,13 @@
 export interface Dependency {
   name: string;
   version: string;
+  kind: "runtime" | "dev";
+}
+
+export interface AnalyzeResult {
+  dependencies: Dependency[];
+  isMonorepo: boolean;
+  workspacePackages?: string[];
 }
 
 export interface LibraryMetadata {
