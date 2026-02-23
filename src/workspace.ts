@@ -3,10 +3,9 @@
  * No external YAML library — uses simple line-by-line parsing.
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { glob } from "node:fs/promises";
 import type { Dependency, AnalyzeResult } from "./types.js";
 
 export interface MonorepoInfo {
@@ -116,6 +115,8 @@ export function parsePnpmWorkspace(content: string): {
 
 /**
  * Expand workspace glob patterns into actual package.json paths.
+ * Supports simple patterns like "apps/*", "packages/*", "libs/**".
+ * Uses readdir instead of glob for Node 20 compatibility.
  */
 export async function resolveWorkspacePackageJsonPaths(
   root: string,
@@ -123,21 +124,24 @@ export async function resolveWorkspacePackageJsonPaths(
 ): Promise<string[]> {
   const paths: string[] = [];
 
-  for (const pattern of patterns) {
-    // Pattern like "apps/*" or "packages/*" — look for package.json in each match
-    const globPattern = pattern.endsWith("/")
-      ? `${pattern}*/package.json`
-      : `${pattern}/package.json`;
+  for (const rawPattern of patterns) {
+    // Normalize: strip trailing /*, /**, or /
+    const pattern = rawPattern.replace(/\/?\*{1,2}$/, "").replace(/\/$/, "");
+    const parentDir = resolve(root, pattern);
+
+    if (!existsSync(parentDir)) continue;
 
     try {
-      for await (const entry of glob(globPattern, { cwd: root })) {
-        const fullPath = resolve(root, String(entry));
-        if (existsSync(fullPath)) {
-          paths.push(fullPath);
+      const entries = await readdir(parentDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const pkgPath = join(parentDir, entry.name, "package.json");
+        if (existsSync(pkgPath)) {
+          paths.push(pkgPath);
         }
       }
     } catch {
-      // Pattern didn't match anything, skip
+      // Directory not readable, skip
     }
   }
 
