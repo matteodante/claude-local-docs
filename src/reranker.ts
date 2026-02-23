@@ -17,7 +17,8 @@ async function loadReranker() {
     "@huggingface/transformers"
   );
   rerankerModel = await AutoModelForSequenceClassification.from_pretrained(
-    RERANKER_MODEL
+    RERANKER_MODEL,
+    { dtype: "q8" }
   );
   rerankerTokenizer = await AutoTokenizer.from_pretrained(RERANKER_MODEL);
   return { model: rerankerModel, tokenizer: rerankerTokenizer };
@@ -48,8 +49,8 @@ export async function rerank(
   const { model, tokenizer } = await loadReranker();
   const results: RerankResult[] = [];
 
-  // Process in batches of 16
-  const batchSize = 16;
+  // Process in batches of 32
+  const batchSize = 32;
   for (let i = 0; i < candidates.length; i += batchSize) {
     const batch = candidates.slice(i, i + batchSize);
 

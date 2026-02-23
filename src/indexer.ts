@@ -10,7 +10,9 @@ const MATRYOSHKA_DIM = 384; // Use 384-dim slice for speed; can bump to 768 for 
 async function getEmbedPipeline() {
   if (embedPipeline) return { pipe: embedPipeline, layerNorm: layerNormFn };
   const transformers = await import("@huggingface/transformers");
-  embedPipeline = await transformers.pipeline("feature-extraction", MODEL_NAME);
+  embedPipeline = await transformers.pipeline("feature-extraction", MODEL_NAME, {
+    dtype: "q8",
+  });
   layerNormFn = transformers.layer_norm;
   return { pipe: embedPipeline, layerNorm: layerNormFn };
 }
@@ -119,7 +121,7 @@ export async function embedTexts(
   const prefixed = texts.map((t) => `${taskType}: ${t}`);
 
   // Process in batches
-  const batchSize = 16;
+  const batchSize = 64;
   for (let i = 0; i < prefixed.length; i += batchSize) {
     const batch = prefixed.slice(i, i + batchSize);
     const raw = await pipe(batch, { pooling: "mean" });

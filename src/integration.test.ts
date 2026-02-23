@@ -1,15 +1,14 @@
 /**
  * Integration test: fetch Prisma llms-full.txt, index it, and run searches.
  *
- * This test hits the network, loads ONNX models, and exercises the full
- * fetch → chunk → embed → store → search → rerank pipeline.
+ * Exercises the full fetch -> chunk -> embed -> store -> search -> rerank pipeline.
  *
  * Run: npm test
  */
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -20,15 +19,35 @@ import { DocStore } from "./store.js";
 import { searchDocs } from "./search.js";
 
 const PRISMA_URL = "https://www.prisma.io/docs/llms-full.txt";
+const CACHE_DIR = join(tmpdir(), "claude-local-docs-fixture");
+const CACHE_FILE = join(CACHE_DIR, "prisma-llms-full.txt");
 
 let tempDir: string;
 let store: DocStore;
 let fetchedContent: string;
 
+/** Load from cache or fetch from network. */
+async function loadPrismaDoc(): Promise<string> {
+  if (existsSync(CACHE_FILE)) {
+    console.log("  Using cached Prisma docs");
+    return readFile(CACHE_FILE, "utf-8");
+  }
+
+  console.log("  Fetching Prisma docs (first run, will be cached)...");
+  const result = await fetchDocContent(PRISMA_URL);
+  assert.equal(result.ok, true, `Fetch failed: ${"error" in result ? result.error : ""}`);
+  assert.ok(result.ok);
+
+  await mkdir(CACHE_DIR, { recursive: true });
+  await writeFile(CACHE_FILE, result.content, "utf-8");
+  console.log(`  Fetched and cached ${result.byteLength} bytes (${(result.byteLength / 1024 / 1024).toFixed(1)} MB)`);
+  return result.content;
+}
+
 describe("Prisma llms-full.txt integration", { timeout: 600_000 }, () => {
   before(async () => {
-    // Create a temp project dir with the structure DocStore expects
     tempDir = await mkdtemp(join(tmpdir(), "claude-local-docs-test-"));
+    fetchedContent = await loadPrismaDoc();
   });
 
   after(async () => {
@@ -39,16 +58,8 @@ describe("Prisma llms-full.txt integration", { timeout: 600_000 }, () => {
 
   // -- Fetch --
 
-  it("fetches Prisma llms-full.txt successfully", async () => {
-    const result = await fetchDocContent(PRISMA_URL);
-    assert.equal(result.ok, true, `Fetch failed: ${"error" in result ? result.error : ""}`);
-    assert.ok(result.ok);
-
-    fetchedContent = result.content;
-    console.log(`  Fetched ${result.byteLength} bytes (${(result.byteLength / 1024 / 1024).toFixed(1)} MB)`);
-
-    // Prisma full docs should be substantial
-    assert.ok(result.byteLength > 1_000_000, `Expected > 1MB, got ${result.byteLength}`);
+  it("fetched content is substantial", () => {
+    assert.ok(fetchedContent.length > 1_000_000, `Expected > 1M chars, got ${fetchedContent.length}`);
   });
 
   // -- Chunking --
@@ -59,18 +70,9 @@ describe("Prisma llms-full.txt integration", { timeout: 600_000 }, () => {
 
     assert.ok(chunks.length > 100, `Expected >100 chunks, got ${chunks.length}`);
 
-    // Every chunk should have the library field set
     for (const c of chunks) {
       assert.equal(c.library, "prisma");
-    }
-
-    // Chunks should not be empty
-    for (const c of chunks) {
       assert.ok(c.text.trim().length > 0, "Found empty chunk");
-    }
-
-    // headingPath should be valid JSON arrays
-    for (const c of chunks) {
       const parsed = JSON.parse(c.headingPath);
       assert.ok(Array.isArray(parsed), `headingPath not an array: ${c.headingPath}`);
     }
@@ -85,8 +87,6 @@ describe("Prisma llms-full.txt integration", { timeout: 600_000 }, () => {
     console.log(`  Indexed ${chunks.length} chunks with embeddings`);
 
     assert.ok(chunks.length > 100);
-
-    // Every chunk should have a 384-dim vector
     for (const c of chunks) {
       assert.equal(c.vector.length, 384, `Expected 384-dim vector, got ${c.vector.length}`);
     }
@@ -100,77 +100,38 @@ describe("Prisma llms-full.txt integration", { timeout: 600_000 }, () => {
 
   // -- Search --
 
-  it("finds relevant results for 'prisma client query'", async () => {
-    const results = await searchDocs("prisma client query", store, {
-      library: "prisma",
-      topK: 5,
+  const searchCases = [
+    { query: "prisma client query", expectTerms: ["prisma", "client", "query"] },
+    { query: "database migration", expectTerms: ["migrat", "schema", "database"] },
+    { query: "prisma schema relations", expectTerms: ["relation", "schema", "model"] },
+  ];
+
+  for (const { query, expectTerms } of searchCases) {
+    it(`returns relevant results for '${query}'`, async () => {
+      const results = await searchDocs(query, store, { library: "prisma", topK: 5 });
+      console.log(`  '${query}' → top score=${results[0]?.score}, heading=${results[0]?.headingPath.join(" > ")}`);
+
+      assert.ok(results.length > 0, "Expected at least 1 result");
+      assert.ok(results.length <= 5);
+
+      const topContent = results[0].content.toLowerCase();
+      assert.ok(
+        expectTerms.some((t) => topContent.includes(t)),
+        `Top result doesn't contain any of [${expectTerms}]`
+      );
     });
-
-    console.log(`  Top result: score=${results[0]?.score}, heading=${results[0]?.headingPath.join(" > ")}`);
-
-    assert.ok(results.length > 0, "Expected at least 1 result");
-    assert.ok(results.length <= 5);
-
-    // Top result should mention "Prisma Client" or "query" somewhere
-    const topContent = results[0].content.toLowerCase();
-    assert.ok(
-      topContent.includes("prisma") || topContent.includes("client") || topContent.includes("query"),
-      "Top result doesn't seem relevant to 'prisma client query'"
-    );
-  });
-
-  it("finds relevant results for 'database migration'", async () => {
-    const results = await searchDocs("database migration", store, {
-      library: "prisma",
-      topK: 5,
-    });
-
-    console.log(`  Top result: score=${results[0]?.score}, heading=${results[0]?.headingPath.join(" > ")}`);
-
-    assert.ok(results.length > 0);
-
-    const topContent = results[0].content.toLowerCase();
-    assert.ok(
-      topContent.includes("migrat") || topContent.includes("schema") || topContent.includes("database"),
-      "Top result doesn't seem relevant to 'database migration'"
-    );
-  });
-
-  it("finds relevant results for 'prisma schema relations'", async () => {
-    const results = await searchDocs("prisma schema relations", store, {
-      library: "prisma",
-      topK: 5,
-    });
-
-    console.log(`  Top result: score=${results[0]?.score}, heading=${results[0]?.headingPath.join(" > ")}`);
-
-    assert.ok(results.length > 0);
-
-    const topContent = results[0].content.toLowerCase();
-    assert.ok(
-      topContent.includes("relation") || topContent.includes("schema") || topContent.includes("model"),
-      "Top result doesn't seem relevant to 'prisma schema relations'"
-    );
-  });
+  }
 
   it("returns scores in descending order", async () => {
-    const results = await searchDocs("CRUD operations", store, {
-      library: "prisma",
-      topK: 10,
-    });
-
+    const results = await searchDocs("CRUD operations", store, { library: "prisma", topK: 10 });
     assert.ok(results.length > 1);
     for (let i = 1; i < results.length; i++) {
-      assert.ok(
-        results[i - 1].score >= results[i].score,
-        `Results not sorted: score[${i - 1}]=${results[i - 1].score} < score[${i}]=${results[i].score}`
-      );
+      assert.ok(results[i - 1].score >= results[i].score, `Not sorted: [${i - 1}]=${results[i - 1].score} < [${i}]=${results[i].score}`);
     }
   });
 
   it("returns results with valid structure", async () => {
     const results = await searchDocs("authentication", store, { topK: 3 });
-
     for (const r of results) {
       assert.equal(typeof r.score, "number");
       assert.equal(typeof r.library, "string");
