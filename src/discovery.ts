@@ -27,9 +27,10 @@ export interface DiscoveryResult {
   url: string;
   content: string;
   byteLength: number;
-  source: "llms-full.txt" | "llms.txt" | "llms.txt-index" | "homepage-html" | "github-raw";
+  source: "llms-full.txt" | "llms.txt" | "llms.txt-index" | "homepage-html" | "github-raw" | "readme";
   expandedUrls?: string[];
   failedUrls?: string[];
+  warning?: string;
 }
 
 // ── npm registry ───────────────────────────────────────────────────────
@@ -99,6 +100,15 @@ export function generateCandidateUrls(info: NpmInfo): string[] {
     } catch {
       // invalid URL — skip
     }
+
+    // /docs/ subpath variant
+    try {
+      const u = new URL(hp);
+      urls.push(`${u.origin}/docs/llms-full.txt`);
+      urls.push(`${u.origin}/docs/llms.txt`);
+    } catch {
+      // invalid URL — skip
+    }
   }
 
   // GitHub raw
@@ -109,6 +119,13 @@ export function generateCandidateUrls(info: NpmInfo): string[] {
       );
       urls.push(
         `https://raw.githubusercontent.com/${info.repoOrg}/${info.repoName}/${branch}/llms.txt`
+      );
+    }
+
+    // README.md fallback (before homepage HTML)
+    for (const branch of ["main", "master"]) {
+      urls.push(
+        `https://raw.githubusercontent.com/${info.repoOrg}/${info.repoName}/${branch}/README.md`
       );
     }
   }
@@ -154,11 +171,7 @@ export function detectIndex(content: string, url: string): IndexDetection {
 
   const linkRatio = linkLines / (lines.length || 1);
 
-  // llms.txt (not llms-full.txt) + small file biased toward index
-  const isLlmsTxt =
-    url.endsWith("/llms.txt") && content.length < 50_000;
-
-  const isIndex = (linkRatio > 0.5 && links.length > 5) || isLlmsTxt;
+  const isIndex = linkRatio > 0.5 && links.length > 5;
 
   return { isIndex, links };
 }
@@ -297,6 +310,7 @@ export function htmlToMarkdown(html: string): string {
 function classifySource(url: string): DiscoveryResult["source"] {
   if (url.endsWith("/llms-full.txt")) return "llms-full.txt";
   if (url.endsWith("/llms.txt")) return "llms.txt";
+  if (url.includes("raw.githubusercontent.com") && url.endsWith("/README.md")) return "readme";
   if (url.includes("raw.githubusercontent.com")) return "github-raw";
   return "homepage-html";
 }
@@ -338,12 +352,16 @@ export async function resolveDocsUrl(
     if (isHtml) {
       const md = htmlToMarkdown(result.content);
       if (md.trim().length > 100) {
-        return {
+        const discoveryResult: DiscoveryResult = {
           url: candidateUrl,
           content: md,
           byteLength: Buffer.byteLength(md),
           source: "homepage-html",
         };
+        if (md.length < 5_000) {
+          discoveryResult.warning = "Content is very small, index may be thin";
+        }
+        return discoveryResult;
       }
       continue;
     }
@@ -353,7 +371,7 @@ export async function resolveDocsUrl(
     if (detection.isIndex) {
       const expanded = await expandIndex(detection.links, candidateUrl);
       if (expanded.content.length > 0) {
-        return {
+        const discoveryResult: DiscoveryResult = {
           url: candidateUrl,
           content: expanded.content,
           byteLength: Buffer.byteLength(expanded.content),
@@ -361,16 +379,24 @@ export async function resolveDocsUrl(
           expandedUrls: expanded.expandedUrls,
           failedUrls: expanded.failedUrls.length > 0 ? expanded.failedUrls : undefined,
         };
+        if (expanded.content.length < 5_000) {
+          discoveryResult.warning = "Content is very small, index may be thin";
+        }
+        return discoveryResult;
       }
     }
 
-    // Full content doc (llms-full.txt, non-index llms.txt, or github-raw)
-    return {
+    // Full content doc (llms-full.txt, non-index llms.txt, github-raw, or readme)
+    const discoveryResult: DiscoveryResult = {
       url: candidateUrl,
       content: result.content,
       byteLength: result.byteLength,
       source,
     };
+    if (result.content.length < 5_000) {
+      discoveryResult.warning = "Content is very small, index may be thin";
+    }
+    return discoveryResult;
   }
 
   throw new Error(

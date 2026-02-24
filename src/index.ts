@@ -376,6 +376,7 @@ server.registerTool(
               totalIndexSize: result.indexSize,
               expandedUrls: discovery.expandedUrls,
               failedUrls: discovery.failedUrls,
+              warning: discovery.warning,
             }),
           },
         ],

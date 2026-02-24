@@ -21,12 +21,14 @@ export function chunkMarkdown(
     const trimmed = currentText.trim();
     if (trimmed.length > 0) {
       const headingPath = headingStack.map((h) => h.text);
+      const prefix =
+        headingPath.length > 0 ? `[${headingPath.join(" > ")}]\n\n` : "";
       const subChunks = splitWithOverlap(trimmed, 1500, 200);
       for (const sub of subChunks) {
         chunks.push({
           library,
           headingPath: JSON.stringify(headingPath),
-          text: sub,
+          text: prefix + sub,
         });
       }
     }
@@ -34,7 +36,7 @@ export function chunkMarkdown(
   }
 
   for (const line of lines) {
-    const headingMatch = line.match(/^(#{1,4})\s+(.+)/);
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
     if (headingMatch) {
       flush();
       const level = headingMatch[1].length;
@@ -77,8 +79,8 @@ function splitWithOverlap(
   for (const para of paragraphs) {
     if (current.length + para.length + 2 > maxChars && current.length > 0) {
       result.push(current.trim());
-      // Start next chunk with overlap from end of current
-      overlapBuffer = current.slice(-overlapChars);
+      // Start next chunk with overlap: snap to last complete paragraph(s)
+      overlapBuffer = snapOverlapToParagraph(current, overlapChars);
       current = overlapBuffer + "\n\n" + para;
     } else {
       current += (current ? "\n\n" : "") + para;
@@ -89,6 +91,22 @@ function splitWithOverlap(
   }
 
   return result;
+}
+
+/**
+ * Walk backward through paragraph breaks to find the last complete
+ * paragraph(s) fitting within maxChars. Falls back to raw char slice
+ * if no paragraph breaks exist in the tail.
+ */
+function snapOverlapToParagraph(text: string, maxChars: number): string {
+  const tail = text.slice(-maxChars);
+  const breakIdx = tail.indexOf("\n\n");
+  if (breakIdx === -1) {
+    // No paragraph break in the tail — fall back to raw slice
+    return tail;
+  }
+  // Return from the first paragraph break onward (complete paragraphs)
+  return tail.slice(breakIdx + 2);
 }
 
 /**

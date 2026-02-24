@@ -74,7 +74,7 @@ export async function searchDocs(
   options?: { library?: string; topK?: number }
 ): Promise<SearchResult[]> {
   const topK = options?.topK ?? 10;
-  const candidateCount = 50; // retrieve more for reranking
+  const candidateCount = 100; // retrieve more for reranking
 
   // Step 1: Vector search via LanceDB
   const [queryVector] = await embedTexts([query], "search_query");
@@ -99,16 +99,16 @@ export async function searchDocs(
     headingPath: row.headingPath,
   }));
 
-  // Step 3: RRF fusion (k=60, BM25 weight=1.0, vector weight=0.7)
+  // Step 3: RRF fusion (k=60, equal weights — heading context makes vector more accurate)
   const fused = reciprocalRankFusion(vectorRanked, bm25Ranked, {
     k: 60,
-    vectorWeight: 0.7,
+    vectorWeight: 1.0,
     bm25Weight: 1.0,
   });
 
-  // Step 4: Cross-encoder rerank top 30 candidates
+  // Step 4: Cross-encoder rerank top 50 candidates
   const rerankCandidates: RerankCandidate[] = fused
-    .slice(0, 30)
+    .slice(0, 50)
     .map((f) => ({
       id: f.id,
       text: f.text,
