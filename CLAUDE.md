@@ -28,13 +28,14 @@ Flags: `--metal` (force native Metal), `--cpu` (force CPU Docker), `--tag <tag>`
 
 Native Metal requires Rust (`rustup.rs`). First run clones TEI and builds with `--features metal`; subsequent runs reuse the installed binary. PIDs are tracked in `.tei-pids` for clean shutdown.
 
-### Search pipeline (4 stages)
+### Search pipeline (4 stages + neighbor expansion)
 
 The `search_docs` tool in `src/search.ts` runs:
 1. **Vector search** — LanceDB with `nomic-ai/nomic-embed-text-v1.5` embeddings (384-dim Matryoshka)
-2. **BM25 search** — LanceDB native full-text search index (stemming, lowercase, stop word removal)
-3. **RRF fusion** — Reciprocal Rank Fusion (k=60) merges both ranked lists
-4. **Cross-encoder rerank** — `cross-encoder/ms-marco-MiniLM-L-6-v2` via TEI rescores top 30 candidates
+2. **BM25 search** — LanceDB native full-text search index (stemming, lowercase, stop word removal). Heading path is prepended to chunk text so BM25 matches section structure (e.g., "Connect > Onboarding").
+3. **RRF fusion** — Reciprocal Rank Fusion (k=60) merges both ranked lists. BM25 weighted 1.0, vector weighted 0.7 — trusts exact keyword matches more for framework-specific queries.
+4. **Cross-encoder rerank** — `cross-encoder/ms-marco-MiniLM-L-6-v2` via TEI rescores top 50 candidates
+5. **Neighbor expansion** — For each result, adjacent chunks (id-1, id+1) from the same library/section are merged to recover context split across chunk boundaries (code examples, etc.)
 
 ### Doc discovery pipeline
 
@@ -77,11 +78,11 @@ The `/fetch-docs` command leverages these discovery patterns, prioritized by rel
 
 - `src/index.ts` — MCP server entry. All 7 tool definitions with `server.registerTool()` and Zod schemas.
 - `src/discovery.ts` — Doc discovery: npm registry (including `llms`/`llmsFull` fields), URL probing, index detection/expansion, HTML→markdown conversion.
-- `src/indexer.ts` — Markdown chunking (heading-based + overlap, 1500 char chunks) and embedding generation via TEI HTTP.
+- `src/indexer.ts` — Code-aware markdown chunking (heading-based + overlap, 4000 char chunks, code fences never split) and embedding generation via TEI HTTP.
 - `src/search.ts` — Full search pipeline. LanceDB native FTS for BM25. RRF fusion and orchestration.
 - `src/reranker.ts` — Cross-encoder reranking via TEI HTTP.
 - `src/store.ts` — LanceDB connection management, FTS index creation, metadata persistence, raw doc storage.
-- `src/fetcher.ts` — Raw HTTP fetch for documentation URLs. Supports configurable timeout (`timeoutMs` option) and returns `finalUrl` after redirects.
+- `src/fetcher.ts` — Raw HTTP fetch for documentation URLs. Sends `Accept-Language: en` to prevent geo-localized content. Supports configurable timeout (`timeoutMs` option) and returns `finalUrl` after redirects.
 - `src/workspace.ts` — Monorepo detection (pnpm/npm/yarn workspaces), pnpm catalog resolution, cross-workspace dependency collection.
 - `src/types.ts` — Shared interfaces: `DocRow`, `SearchResult`, `DocMetadata`, `Dependency`, `AnalyzeResult`, etc.
 - `docker-compose.yml` — TEI containers (uses `${TEI_TAG:-cpu-1.9}`). `docker-compose.nvidia.yml` — NVIDIA GPU device passthrough.
@@ -127,10 +128,15 @@ Per-project at `{project}/.claude/docs/`:
 - `workspace:*` internal deps are skipped automatically.
 - All workspace package.json files are scanned and deps deduplicated (runtime wins over dev).
 
-## RRF parameters
+## Search parameters
 
-- `k = 60` (standard default used by Azure, Weaviate, OpenSearch)
+- Chunk size: 4000 chars (code-aware, never splits inside fenced code blocks)
+- Chunk overlap: 400 chars at paragraph boundaries
+- Heading path prepended to each chunk for BM25 discoverability
+- RRF k = 60 (standard default used by Azure, Weaviate, OpenSearch)
 - BM25 weight = `1.0`, vector weight = `0.7` (trust exact keyword matches slightly more)
 - Top 50 candidates retrieved from each search method
-- Top 30 sent to cross-encoder reranker
+- Top 50 sent to cross-encoder reranker
+- Neighbor expansion: adjacent chunks (id-1, id+1) merged if same library + heading section
+- Full chunk content returned to Claude (no truncation)
 - Final top-K returned to caller (default 10)

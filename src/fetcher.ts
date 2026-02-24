@@ -29,6 +29,7 @@ export async function fetchDocContent(
       headers: {
         "User-Agent": "claude-local-docs/1.0",
         "Accept": "text/plain, text/markdown, text/html, */*",
+        "Accept-Language": "en-US,en;q=0.9",
       },
       redirect: "follow",
     });

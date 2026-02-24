@@ -10,9 +10,54 @@ import { searchDocs } from "./search.js";
 import { analyzeDependencies } from "./workspace.js";
 import { fetchDocContent } from "./fetcher.js";
 import { resolveDocsUrl } from "./discovery.js";
-import type { Dependency } from "./types.js";
+import type { Dependency, SearchResult } from "./types.js";
 
 const projectRoot = resolveProjectRoot();
+
+/**
+ * Expand search results with adjacent chunks (id-1 and id+1) from the same library/section.
+ * This recovers context when code examples are split across chunk boundaries.
+ */
+async function expandWithNeighbors(
+  results: SearchResult[],
+  store: DocStore
+): Promise<SearchResult[]> {
+  const resultIds = new Set(results.map((r) => r.chunkId));
+  const expanded: SearchResult[] = [];
+
+  for (const result of results) {
+    const headingJson = JSON.stringify(result.headingPath);
+    const parts: string[] = [];
+
+    // Try previous chunk
+    const prevId = result.chunkId - 1;
+    if (!resultIds.has(prevId)) {
+      const prev = await store.getChunkById(prevId);
+      if (prev && prev.library === result.library && prev.headingPath === headingJson) {
+        parts.push(prev.text);
+      }
+    }
+
+    parts.push(result.content);
+
+    // Try next chunk
+    const nextId = result.chunkId + 1;
+    if (!resultIds.has(nextId)) {
+      const next = await store.getChunkById(nextId);
+      if (next && next.library === result.library && next.headingPath === headingJson) {
+        parts.push(next.text);
+      }
+    }
+
+    expanded.push({
+      ...result,
+      content: parts.length > 1 ? parts.join("\n\n") : result.content,
+    });
+  }
+
+  return expanded;
+}
+
 const store = new DocStore(projectRoot);
 
 const server = new McpServer({
@@ -129,15 +174,15 @@ server.registerTool(
 
       const results = await searchDocs(query, store, { library, topK });
 
-      const formatted = results.map((r) => ({
+      // Expand results with adjacent chunks for fuller context
+      const expanded = await expandWithNeighbors(results, store);
+
+      const formatted = expanded.map((r) => ({
         score: r.score,
         library: r.library,
         heading: r.headingPath.join(" > "),
         chunkId: r.chunkId,
-        content:
-          r.content.length > 500
-            ? r.content.slice(0, 500) + "..."
-            : r.content,
+        content: r.content,
       }));
 
       return {
