@@ -349,7 +349,7 @@ server.registerTool(
   "discover_and_fetch_docs",
   {
     description:
-      "Discover, fetch, and index documentation for a library automatically. Queries npm registry for homepage/repo, probes for llms-full.txt and llms.txt, detects index files (link lists) and expands them by fetching each linked page, converts HTML to markdown. Fully self-contained — no WebSearch or WebFetch needed.",
+      "Discover, fetch, and index documentation for a library automatically. Checks package.json llms/llmsFull fields first, then probes homepage, docs.{domain}, llms.{domain}, /docs/ subpath, and GitHub raw for llms-full.txt/llms.txt. Detects index files and expands them. Falls back to homepage HTML → markdown conversion. Self-contained — no WebSearch needed.",
     inputSchema: {
       library: z.string().describe("npm package name (e.g. 'react', '@tanstack/query')"),
       version: z.string().optional().describe("Library version (optional, auto-detected from npm)"),

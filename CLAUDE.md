@@ -9,7 +9,7 @@ A local-first alternative to Context7 for Claude Code. Provides offline-capable 
 The plugin has two parts:
 
 1. **MCP server** (`src/index.ts`) — Exposes 7 tools via stdio transport using `server.registerTool()`. Handles storage, indexing, search, doc discovery, and raw doc fetching.
-2. **`/fetch-docs` command** (`commands/fetch-docs.md`) — Instructs Claude to call `discover_and_fetch_docs` for each runtime dependency. Fully self-contained — no WebSearch or WebFetch needed.
+2. **`/fetch-docs` command** (`commands/fetch-docs.md`) — Instructs Claude to fetch docs for each runtime dependency. Uses a multi-step strategy: (1) known URL reference table, (2) WebSearch to find actual `llms.txt`/`llms-full.txt` URLs, (3) `discover_and_fetch_docs` for automatic probing (npm fields + URL patterns), (4) training data fallback. Includes a curated table of verified URLs for 40+ popular libraries.
 
 ### TEI backend
 
@@ -38,21 +38,45 @@ The `search_docs` tool in `src/search.ts` runs:
 
 ### Doc discovery pipeline
 
-The `discover_and_fetch_docs` tool (Tool 7) in `src/discovery.ts` makes the server self-contained:
+The `discover_and_fetch_docs` tool (Tool 7) in `src/discovery.ts` provides automatic doc discovery:
 
-1. **npm registry lookup** — `registry.npmjs.org/{lib}/latest` → homepage, repository URL, version
-2. **Candidate URL generation** — ordered probe list: `{homepage}/llms-full.txt`, `{homepage}/llms.txt`, `docs.{domain}/llms-full.txt`, GitHub raw (main + master branches), homepage HTML fallback
-3. **Sequential probing** — fetches each candidate with 15s timeout, stops on first success
-4. **Index detection** — if the content is a link-heavy file (>50% link lines, 5+ links), it's treated as an index
-5. **Index expansion** — fetches each linked page (concurrency 5, 200ms inter-request delay, max 100 links), converts HTML → markdown via turndown, prepends heading context
-6. **HTML → markdown** — turndown with GFM plugin; extracts `<main>`/`<article>` content, strips nav/footer/header/script/style/aside
+1. **npm registry lookup** — `registry.npmjs.org/{lib}/latest` → homepage, repository URL, version, and `llms`/`llmsFull` package.json fields
+2. **package.json `llms`/`llmsFull` fields** — If the package includes these fields (Colin Hacks convention), their URLs are tried first as the most reliable source
+3. **Candidate URL generation** — ordered probe list:
+   - `{homepage}/llms-full.txt`, `{homepage}/llms.txt`
+   - `docs.{domain}/llms-full.txt`, `docs.{domain}/llms.txt` (Mintlify/GitBook pattern)
+   - `{origin}/docs/llms-full.txt`, `{origin}/docs/llms.txt`
+   - `llms.{domain}/llms-full.txt`, `llms.{domain}/llms.txt` (Motion-style pattern)
+   - GitHub raw (main + master branches)
+   - README.md fallback, homepage HTML fallback
+4. **Sequential probing** — fetches each candidate with 15s timeout, stops on first success
+5. **Index detection** — if the content is a link-heavy file (>50% link lines, 5+ links), it's treated as an index
+6. **Index expansion** — fetches each linked page (concurrency 5, 200ms inter-request delay, max 100 links), converts HTML → markdown via turndown, prepends heading context
+7. **HTML → markdown** — turndown with GFM plugin; extracts `<main>`/`<article>` content, strips nav/footer/header/script/style/aside
 
 Dependencies: `turndown` and `turndown-plugin-gfm` for HTML conversion.
+
+### llms.txt ecosystem patterns
+
+The `/fetch-docs` command leverages these discovery patterns, prioritized by reliability:
+
+1. **Known URL reference table** — curated list of verified URLs for 40+ popular libraries (in command file)
+2. **WebSearch** — finds llms.txt URLs that aren't at predictable locations
+3. **package.json `llms`/`llmsFull` fields** — machine-readable convention proposed by Zod author (Colin Hacks). Libraries include doc URLs directly in npm metadata. `discover_and_fetch_docs` checks this automatically.
+4. **Documentation platform auto-generation**:
+   - **Mintlify** — auto-generates `/llms.txt` and `/llms-full.txt` for ALL hosted docs (Anthropic, Cursor, Stripe, CrewAI, Pinecone, etc.)
+   - **GitBook** — auto-generates `/llms.txt` since Jan 2025
+   - **Docusaurus** — via community plugin `docusaurus-plugin-llms-txt`
+   - **Fern** — native support
+5. **Special URL patterns**:
+   - Stripe-style `.md` suffix: `docs.stripe.com/{page}.md` gives raw markdown
+   - Motion-style subdomain: `llms.motion.dev/docs/{page}.md`
+   - Nuxt Content: separate `content.nuxt.com/llms-full.txt`
 
 ### Key files
 
 - `src/index.ts` — MCP server entry. All 7 tool definitions with `server.registerTool()` and Zod schemas.
-- `src/discovery.ts` — Self-contained doc discovery: npm registry, URL probing, index detection/expansion, HTML→markdown conversion.
+- `src/discovery.ts` — Doc discovery: npm registry (including `llms`/`llmsFull` fields), URL probing, index detection/expansion, HTML→markdown conversion.
 - `src/indexer.ts` — Markdown chunking (heading-based + overlap, 1500 char chunks) and embedding generation via TEI HTTP.
 - `src/search.ts` — Full search pipeline. LanceDB native FTS for BM25. RRF fusion and orchestration.
 - `src/reranker.ts` — Cross-encoder reranking via TEI HTTP.
@@ -94,7 +118,7 @@ Per-project at `{project}/.claude/docs/`:
 - Chunk IDs are auto-incrementing integers, unique across all libraries.
 - Tools are registered via `server.registerTool()` (not the deprecated `server.tool()`).
 - Dependencies are tagged as `runtime` or `dev`. The `/fetch-docs` command skips dev deps by default.
-- `discover_and_fetch_docs` is fully self-contained — no WebSearch or WebFetch needed. It queries npm, probes for llms.txt, detects index files, expands them, and converts HTML to markdown.
+- `discover_and_fetch_docs` checks npm package.json `llms`/`llmsFull` fields first, then probes standard URL patterns. The `/fetch-docs` command adds WebSearch and a known URL table on top of this.
 
 ## Monorepo support
 

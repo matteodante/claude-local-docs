@@ -16,6 +16,10 @@ interface NpmInfo {
   repoUrl?: string; // normalized HTTPS URL without .git
   repoOrg?: string;
   repoName?: string;
+  /** URL from package.json "llms" field (Colin Hacks convention) */
+  llmsUrl?: string;
+  /** URL from package.json "llmsFull" field (Colin Hacks convention) */
+  llmsFullUrl?: string;
 }
 
 interface IndexDetection {
@@ -27,7 +31,7 @@ export interface DiscoveryResult {
   url: string;
   content: string;
   byteLength: number;
-  source: "llms-full.txt" | "llms.txt" | "llms.txt-index" | "homepage-html" | "github-raw" | "readme";
+  source: "npm-llms-field" | "llms-full.txt" | "llms.txt" | "llms.txt-index" | "homepage-html" | "github-raw" | "readme";
   expandedUrls?: string[];
   failedUrls?: string[];
   warning?: string;
@@ -61,6 +65,10 @@ export async function queryNpmRegistry(library: string): Promise<NpmInfo> {
     }
   }
 
+  // Extract llms/llmsFull fields (Colin Hacks convention for AI autodiscovery)
+  const llmsUrl = typeof pkg.llms === "string" ? pkg.llms : undefined;
+  const llmsFullUrl = typeof pkg.llmsFull === "string" ? pkg.llmsFull : undefined;
+
   return {
     name: pkg.name,
     version: pkg.version,
@@ -68,6 +76,8 @@ export async function queryNpmRegistry(library: string): Promise<NpmInfo> {
     repoUrl,
     repoOrg,
     repoName,
+    llmsUrl,
+    llmsFullUrl,
   };
 }
 
@@ -83,19 +93,31 @@ function normalizeRepoUrl(raw: string): string {
 
 export function generateCandidateUrls(info: NpmInfo): string[] {
   const urls: string[] = [];
+  const seen = new Set<string>();
+  const add = (url: string) => {
+    if (!seen.has(url)) {
+      seen.add(url);
+      urls.push(url);
+    }
+  };
 
+  // ── Priority 1: package.json llms/llmsFull fields (most reliable) ──
+  if (info.llmsFullUrl) add(info.llmsFullUrl);
+  if (info.llmsUrl) add(info.llmsUrl);
+
+  // ── Priority 2: homepage-based probing ──
   if (info.homepage) {
     const hp = info.homepage.replace(/\/$/, "");
-    urls.push(`${hp}/llms-full.txt`);
-    urls.push(`${hp}/llms.txt`);
+    add(`${hp}/llms-full.txt`);
+    add(`${hp}/llms.txt`);
 
-    // docs.{domain} variant
+    // docs.{domain} variant (Mintlify/GitBook auto-generate pattern)
     try {
       const u = new URL(hp);
       if (!u.hostname.startsWith("docs.")) {
         const docsHost = `docs.${u.hostname}`;
-        urls.push(`${u.protocol}//${docsHost}/llms-full.txt`);
-        urls.push(`${u.protocol}//${docsHost}/llms.txt`);
+        add(`${u.protocol}//${docsHost}/llms-full.txt`);
+        add(`${u.protocol}//${docsHost}/llms.txt`);
       }
     } catch {
       // invalid URL — skip
@@ -104,35 +126,46 @@ export function generateCandidateUrls(info: NpmInfo): string[] {
     // /docs/ subpath variant
     try {
       const u = new URL(hp);
-      urls.push(`${u.origin}/docs/llms-full.txt`);
-      urls.push(`${u.origin}/docs/llms.txt`);
+      add(`${u.origin}/docs/llms-full.txt`);
+      add(`${u.origin}/docs/llms.txt`);
+    } catch {
+      // invalid URL — skip
+    }
+
+    // llms.{domain} subdomain (Motion-style pattern)
+    try {
+      const u = new URL(hp);
+      if (!u.hostname.startsWith("llms.")) {
+        add(`${u.protocol}//llms.${u.hostname}/llms-full.txt`);
+        add(`${u.protocol}//llms.${u.hostname}/llms.txt`);
+      }
     } catch {
       // invalid URL — skip
     }
   }
 
-  // GitHub raw
+  // ── Priority 3: GitHub raw ──
   if (info.repoOrg && info.repoName) {
     for (const branch of ["main", "master"]) {
-      urls.push(
+      add(
         `https://raw.githubusercontent.com/${info.repoOrg}/${info.repoName}/${branch}/llms-full.txt`
       );
-      urls.push(
+      add(
         `https://raw.githubusercontent.com/${info.repoOrg}/${info.repoName}/${branch}/llms.txt`
       );
     }
 
     // README.md fallback (before homepage HTML)
     for (const branch of ["main", "master"]) {
-      urls.push(
+      add(
         `https://raw.githubusercontent.com/${info.repoOrg}/${info.repoName}/${branch}/README.md`
       );
     }
   }
 
-  // Homepage HTML fallback (last)
+  // ── Priority 4: Homepage HTML fallback (last) ──
   if (info.homepage) {
-    urls.push(info.homepage);
+    add(info.homepage);
   }
 
   return urls;
@@ -307,7 +340,9 @@ export function htmlToMarkdown(html: string): string {
   return getTurndown().turndown(content);
 }
 
-function classifySource(url: string): DiscoveryResult["source"] {
+function classifySource(url: string, npmInfo?: NpmInfo): DiscoveryResult["source"] {
+  // Check if URL was from package.json llms/llmsFull fields
+  if (npmInfo && (url === npmInfo.llmsFullUrl || url === npmInfo.llmsUrl)) return "npm-llms-field";
   if (url.endsWith("/llms-full.txt")) return "llms-full.txt";
   if (url.endsWith("/llms.txt")) return "llms.txt";
   if (url.includes("raw.githubusercontent.com") && url.endsWith("/README.md")) return "readme";
@@ -320,10 +355,10 @@ function classifySource(url: string): DiscoveryResult["source"] {
 export async function resolveDocsUrl(
   library: string
 ): Promise<DiscoveryResult> {
-  // 1. Query npm registry
+  // 1. Query npm registry (also extracts llms/llmsFull package.json fields)
   const npmInfo = await queryNpmRegistry(library);
 
-  // 2. Generate candidate URLs
+  // 2. Generate candidate URLs (npm fields first, then homepage, docs subdomain, etc.)
   const candidates = generateCandidateUrls(npmInfo);
 
   if (candidates.length === 0) {
@@ -345,7 +380,7 @@ export async function resolveDocsUrl(
     if (isBinary) continue;
 
     // Determine source label
-    const source = classifySource(candidateUrl);
+    const source = classifySource(candidateUrl, npmInfo);
     const isHtml = ct.includes("html");
 
     // 4. HTML → convert to markdown
@@ -386,7 +421,7 @@ export async function resolveDocsUrl(
       }
     }
 
-    // Full content doc (llms-full.txt, non-index llms.txt, github-raw, or readme)
+    // Full content doc (npm-llms-field, llms-full.txt, non-index llms.txt, github-raw, or readme)
     const discoveryResult: DiscoveryResult = {
       url: candidateUrl,
       content: result.content,
