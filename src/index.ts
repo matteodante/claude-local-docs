@@ -307,7 +307,7 @@ server.registerTool(
       const summary = chunks.map((c: any) => ({
         id: c.id,
         heading: typeof c.headingPath === "string"
-          ? JSON.parse(c.headingPath).join(" > ")
+          ? (() => { try { return JSON.parse(c.headingPath).join(" > "); } catch { return c.headingPath; } })()
           : c.headingPath,
         preview: c.text.slice(0, 120) + (c.text.length > 120 ? "..." : ""),
       }));

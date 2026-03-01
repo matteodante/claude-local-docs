@@ -106,7 +106,10 @@ export function generateCandidateUrls(info: NpmInfo): string[] {
   if (info.llmsUrl) add(info.llmsUrl);
 
   // ── Priority 2: homepage-based probing ──
-  if (info.homepage) {
+  // Skip when homepage is a GitHub URL — GitHub redirects /llms.txt to
+  // docs.github.com, returning GitHub's own documentation instead.
+  const isGitHubHomepage = info.homepage?.startsWith("https://github.com/");
+  if (info.homepage && !isGitHubHomepage) {
     const hp = info.homepage.replace(/\/$/, "");
     add(`${hp}/llms-full.txt`);
     add(`${hp}/llms.txt`);
@@ -164,7 +167,7 @@ export function generateCandidateUrls(info: NpmInfo): string[] {
   }
 
   // ── Priority 4: Homepage HTML fallback (last) ──
-  if (info.homepage) {
+  if (info.homepage && !isGitHubHomepage) {
     add(info.homepage);
   }
 
@@ -181,18 +184,44 @@ export function detectIndex(content: string, url: string): IndexDetection {
     return { isIndex: false, links: [] };
   }
 
+  // Extract base domain for same-domain filtering during expansion
+  let baseDomain: string | undefined;
+  try {
+    baseDomain = new URL(url).hostname;
+  } catch {
+    // ignore
+  }
+
   const links: { text: string; url: string }[] = [];
   for (const m of content.matchAll(MD_LINK_RE)) {
     const href = m[2].trim();
     // Only keep http(s) links and relative paths that look like docs
     if (href.startsWith("http") || href.startsWith("/") || href.endsWith(".md") || href.endsWith(".txt")) {
+      // Skip GitHub issue/PR/action URLs — these are not documentation
+      if (/github\.com\/[^/]+\/[^/]+\/(issues|pull|actions|discussions|commit|compare)\b/.test(href)) {
+        continue;
+      }
+      // Only keep links on the same domain (for absolute URLs)
+      if (href.startsWith("http") && baseDomain) {
+        try {
+          const linkDomain = new URL(href).hostname;
+          if (linkDomain !== baseDomain && !linkDomain.endsWith(`.${baseDomain}`)) {
+            continue;
+          }
+        } catch {
+          continue;
+        }
+      }
       links.push({ text: m[1], url: href });
     }
   }
 
-  if (links.length < 5) {
+  if (links.length < 8) {
     return { isIndex: false, links: [] };
   }
+
+  // Check for index markers
+  const hasIndexMarkers = /table of contents|documentation|api reference/i.test(content.slice(0, 2_000));
 
   // Count lines that are mostly links vs prose
   const lines = content.split("\n").filter((l) => l.trim().length > 0);
@@ -204,7 +233,7 @@ export function detectIndex(content: string, url: string): IndexDetection {
 
   const linkRatio = linkLines / (lines.length || 1);
 
-  const isIndex = linkRatio > 0.5 && links.length > 5;
+  const isIndex = (linkRatio > 0.5 && links.length >= 8) || (hasIndexMarkers && links.length >= 8 && linkRatio > 0.3);
 
   return { isIndex, links };
 }
@@ -370,6 +399,18 @@ export async function resolveDocsUrl(
     const result = await fetchDocContent(candidateUrl, { timeoutMs: 15_000 });
     if (!result.ok) continue;
 
+    // Redirect domain validation: reject if the final URL redirected to an
+    // unrelated domain (e.g., github.com/lib/llms.txt → docs.github.com)
+    try {
+      const candidateDomain = new URL(candidateUrl).hostname;
+      const finalDomain = new URL(result.finalUrl).hostname;
+      if (candidateDomain !== finalDomain && !finalDomain.endsWith(`.${candidateDomain}`) && !candidateDomain.endsWith(`.${finalDomain}`)) {
+        continue;
+      }
+    } catch {
+      // URL parse failed — skip validation
+    }
+
     const ct = result.contentType.toLowerCase();
     const isBinary =
       ct.includes("image") ||
@@ -378,6 +419,18 @@ export async function resolveDocsUrl(
       ct.includes("pdf") ||
       ct.includes("zip");
     if (isBinary) continue;
+
+    // Content quality validation: reject error pages and very short content
+    const contentPreview = result.content.slice(0, 5_000).toLowerCase();
+    if (/^\s*<!doctype|^\s*<html/i.test(result.content) && !ct.includes("html")) {
+      continue; // HTML served as text/plain — likely an error page
+    }
+    if (contentPreview.includes("404") && contentPreview.includes("not found") && result.content.length < 5_000) {
+      continue; // Error page
+    }
+    if (contentPreview.includes("page not found") && result.content.length < 5_000) {
+      continue;
+    }
 
     // Determine source label
     const source = classifySource(candidateUrl, npmInfo);

@@ -3,6 +3,22 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { DocRow, DocMetadata, LibraryMetadata } from "./types.js";
 
+// npm package name validation pattern
+const NPM_NAME_RE = /^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*$/;
+
+/** Escape a string for use in LanceDB SQL filter expressions. */
+function sqlEscapeString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+/** Build a safe library filter expression. Throws on invalid names. */
+function libraryFilter(library: string): string {
+  if (!NPM_NAME_RE.test(library)) {
+    throw new Error(`Invalid library name: ${library}`);
+  }
+  return `library = '${sqlEscapeString(library)}'`;
+}
+
 // Lazy-loaded LanceDB connection
 let dbInstance: any = null;
 let tableInstance: any = null;
@@ -91,7 +107,7 @@ export class DocStore {
     let table = await this.getTable();
     if (table) {
       // Delete existing rows for this library, then add new ones
-      await table.delete(`library = '${library.replace(/'/g, "''")}'`);
+      await table.delete(libraryFilter(library));
       if (rows.length > 0) {
         await table.add(rows);
       }
@@ -102,6 +118,10 @@ export class DocStore {
         tableInstance = table;
       }
     }
+
+    // Rebuild FTS index BEFORE saving metadata — if FTS fails, metadata
+    // won't claim the library is indexed
+    await this.createFtsIndex();
 
     // Update metadata
     const metadata = await this.loadMetadata();
@@ -119,9 +139,6 @@ export class DocStore {
       metadata.libraries.push(libMeta);
     }
     await this.saveMetadata(metadata);
-
-    // Rebuild FTS index after adding new rows
-    await this.createFtsIndex();
 
     // Count total rows
     const totalRows = table
@@ -145,7 +162,7 @@ export class DocStore {
 
     let query = table.vectorSearch(queryVector).limit(limit);
     if (library) {
-      query = query.where(`library = '${library.replace(/'/g, "''")}'`);
+      query = query.where(libraryFilter(library));
     }
     return await query.toArray();
   }
@@ -157,7 +174,7 @@ export class DocStore {
 
     let query = table.query();
     if (library) {
-      query = query.where(`library = '${library.replace(/'/g, "''")}'`);
+      query = query.where(libraryFilter(library));
     }
     return await query.toArray();
   }
@@ -178,8 +195,12 @@ export class DocStore {
     const chunks = await this.getChunks(library);
     const lowerHeading = heading.toLowerCase();
     return chunks.filter((c: DocRow) => {
-      const path = JSON.parse(c.headingPath) as string[];
-      return path.some((h) => h.toLowerCase().includes(lowerHeading));
+      try {
+        const path = JSON.parse(c.headingPath) as string[];
+        return path.some((h) => h.toLowerCase().includes(lowerHeading));
+      } catch {
+        return false;
+      }
     });
   }
 
@@ -201,7 +222,7 @@ export class DocStore {
     try {
       let q = table.query().fullTextSearch(query, { columns: ["text"] }).limit(limit);
       if (library) {
-        q = q.where(`library = '${library.replace(/'/g, "''")}'`);
+        q = q.where(libraryFilter(library));
       }
       return await q.toArray();
     } catch {

@@ -33,46 +33,47 @@ Call `list_docs` to see which libraries are already indexed. **Skip** any librar
 
 ### 4. Fetch Documentation
 
-For each remaining library, follow this multi-step strategy. The goal is to find the **best quality** source — `llms-full.txt` > `llms.txt` (expanded index) > homepage HTML > README.
+For each remaining library, follow this strategy. The goal is to find the **best quality** source — `llms-full.txt` > `llms.txt` (expanded index) > homepage HTML > README.
 
 #### Step A: Check Known URLs first
 
-Before any searching, check if the library is in the **Known URLs Reference** below. If there's a known `llms-full.txt` or `llms.txt` URL, use it directly with `fetch_and_store_doc`. This is the fastest path.
+Before any probing, check if the library is in the **Known URLs Reference** below. If there's a known `llms-full.txt` or `llms.txt` URL, use it directly with `fetch_and_store_doc`. This is the fastest path.
 
-#### Step B: WebSearch for llms.txt
+#### Step B: `discover_and_fetch_docs` (automatic probing)
 
-For libraries NOT in the known list, use **WebSearch** to find the actual `llms.txt` or `llms-full.txt` URL. Use queries like:
+For libraries NOT in the known list, call **`discover_and_fetch_docs`**. This tool automatically:
+1. Checks npm registry for `llms`/`llmsFull` fields in package.json (newest convention)
+2. Probes homepage (skipping GitHub homepages), `docs.{domain}`, `llms.{domain}`, `/docs/` subpath for llms-full.txt/llms.txt
+3. Validates redirect domains (rejects cross-domain redirects like GitHub → docs.github.com)
+4. Validates content quality (rejects 404 pages, too-short content)
+5. Probes GitHub raw for llms-full.txt/llms.txt on main/master branches
+6. Falls back to README.md from GitHub
+7. Falls back to homepage HTML → markdown conversion
+8. Detects index files and expands them by fetching linked pages
 
-> `{library-name} llms-full.txt site:{homepage-domain}`
+#### Step C: WebSearch fallback
 
-or more broadly:
+If `discover_and_fetch_docs` fails or returns very thin results (< 3 chunks), use **WebSearch** to find the actual `llms.txt` or `llms-full.txt` URL:
 
 > `{library-name} llms-full.txt OR llms.txt documentation`
 
-If the search finds a concrete URL to an `llms.txt` or `llms-full.txt` file, pass it directly to **`fetch_and_store_doc`**. Prefer `llms-full.txt` over `llms.txt` when both exist.
-
-**Batch the searches**: Run WebSearch for multiple libraries in parallel (up to 5 at a time) to collect URLs upfront. Then fetch them one by one.
-
-#### Step C: `discover_and_fetch_docs` (automatic probing)
-
-If neither known URLs nor WebSearch found an `llms.txt` URL, call **`discover_and_fetch_docs`**. This tool automatically:
-1. Checks npm registry for `llms`/`llmsFull` fields in package.json (newest convention)
-2. Probes homepage, `docs.{domain}`, `llms.{domain}`, `/docs/` subpath for llms-full.txt/llms.txt
-3. Probes GitHub raw for llms-full.txt/llms.txt on main/master branches
-4. Falls back to README.md from GitHub
-5. Falls back to homepage HTML → markdown conversion
-6. Detects index files and expands them by fetching linked pages
+If the search finds a concrete URL, pass it to **`fetch_and_store_doc`**. Prefer `llms-full.txt` over `llms.txt`.
 
 #### Step D: Training data fallback
 
 If all above fail, try **`fetch_and_store_doc`** with documentation URLs you know from your training data (GitHub raw docs, official doc site pages, etc.).
 
-#### Evaluating results
+#### Evaluating results & chunk quality
 
 After each library is fetched, check the chunk count:
-- **< 5 chunks**: Very thin. Use WebSearch to find additional doc pages (API reference, guides) and fetch with `fetch_and_store_doc` to supplement.
+- **< 3 chunks**: Very thin — flag as "very thin, may need supplementing". Try `fetch_and_store_doc` with additional doc pages from training data.
+- **3-5 chunks**: Thin. Acceptable for small/simple libraries, but note it in the summary.
 - **5-20 chunks**: Acceptable for small libraries.
 - **20+ chunks**: Good coverage.
+
+Also note the source type:
+- `readme` fallback means the library has no proper docs site — worth noting
+- `homepage-html` means HTML was converted — quality varies
 
 #### Progress reporting
 
@@ -93,6 +94,12 @@ Done! Indexed X/Y libraries.
   express      — 30 chunks (homepage-html)
   lodash       — FAILED (no docs found)
 
+Thin coverage (< 5 chunks):
+  some-lib     — 2 chunks (readme) ⚠️
+
+README fallback (no docs site found):
+  another-lib  — 8 chunks (readme)
+
 Total: 280 chunks across 4 libraries.
 Use search_docs to query your documentation.
 ```
@@ -112,10 +119,11 @@ Use these URLs directly with `fetch_and_store_doc` — no searching needed. Pref
 | svelte | `https://svelte.dev/llms-full.txt` |
 | @sveltejs/kit | `https://svelte.dev/llms-full.txt` |
 | vue | (no official llms.txt — use `discover_and_fetch_docs`) |
-| react-native | `https://reactnative.dev/llms.txt` |
+| react-native | `https://reactnative.dev/llms-full.txt` |
 | expo | `https://docs.expo.dev/llms-full.txt` |
 | hono | `https://hono.dev/llms.txt` |
 | bun | `https://bun.sh/llms.txt` |
+| astro | `https://astro.build/llms.txt` |
 
 ### Styling & UI
 
@@ -139,6 +147,7 @@ Use these URLs directly with `fetch_and_store_doc` — no searching needed. Pref
 | drizzle-orm | `https://orm.drizzle.team/llms-full.txt` |
 | @prisma/client | `https://prisma.io/docs/llms-full.txt` |
 | convex | `https://docs.convex.dev/llms.txt` |
+| zustand | `https://zustand.docs.pmnd.rs/llms-full.txt` |
 
 ### Backend & APIs
 
@@ -149,6 +158,7 @@ Use these URLs directly with `fetch_and_store_doc` — no searching needed. Pref
 | resend | `https://resend.com/docs/llms-full.txt` |
 | @medusajs/medusa | `https://docs.medusajs.com/llms-full.txt` |
 | better-auth | `https://www.better-auth.com/llms.txt` |
+| bullmq | `https://docs.bullmq.io/llms-full.txt` |
 
 ### AI & LLM
 
@@ -171,11 +181,27 @@ Use these URLs directly with `fetch_and_store_doc` — no searching needed. Pref
 | @netlify/functions | `https://docs.netlify.com/llms.txt` |
 | @liveblocks/client | `https://liveblocks.io/llms-full.txt` |
 
+### React Native Libraries
+
+| Library | Best URL |
+|---|---|
+| react-native-reanimated | `https://docs.swmansion.com/react-native-reanimated/llms.txt` |
+| react-native-gesture-handler | `https://docs.swmansion.com/react-native-gesture-handler/llms.txt` |
+| @react-navigation/native | `https://reactnavigation.org/llms.txt` |
+| react-native-keyboard-controller | `https://kirillzyusko.github.io/react-native-keyboard-controller/llms-full.txt` |
+
+### i18n
+
+| Library | Best URL |
+|---|---|
+| i18next | `https://www.i18next.com/llms-full.txt` |
+| react-i18next | `https://react.i18next.com/llms-full.txt` |
+
 ### Animation
 
 | Library | Best URL |
 |---|---|
-| motion / framer-motion | Special: `https://llms.motion.dev/docs/react-quick-start.md` (or use WebSearch for full index) |
+| motion / framer-motion | Special: `https://llms.motion.dev/docs/react-quick-start.md` (or use `discover_and_fetch_docs`) |
 
 ### Notes on special patterns
 
@@ -188,13 +214,13 @@ Use these URLs directly with `fetch_and_store_doc` — no searching needed. Pref
 
 ## Critical Rules
 
-- **Check known URLs first** — the reference table above is faster and more reliable than searching.
-- **Search second, probe third** — use WebSearch to find llms.txt URLs before falling back to blind URL probing via `discover_and_fetch_docs`.
+- **Check known URLs first** — the reference table above is faster and more reliable than probing.
+- **Use `discover_and_fetch_docs` for unknown libraries** — it now correctly handles GitHub homepages and validates redirects.
 - **Prefer `llms-full.txt` over `llms.txt`** — the full version has complete documentation without truncation.
-- **Use `fetch_and_store_doc` when you have a known URL** — from the reference table, WebSearch results, or training data.
+- **Use `fetch_and_store_doc` when you have a known URL** — from the reference table or training data.
 - **Use `discover_and_fetch_docs` when you have no URL** — it will probe common patterns automatically.
-- **Supplement thin results** — if a library has < 5 chunks, search for additional doc pages and fetch them.
+- **Flag thin results** — report libraries with < 3 chunks as "very thin" in the summary.
 - **NEVER write files to the filesystem directly.** Do NOT use the Write tool, Bash tool, or any other method to save documentation content to disk. ALL storage goes through the MCP tools.
-- **One library at a time for fetching** — clear progress, no batching (but WebSearch can be batched)
+- **One library at a time for fetching** — clear progress, no batching
 - **Skip dev deps by default** — runtime deps only
 - Handle errors gracefully: if a library fails, log it and move to the next one

@@ -74,7 +74,7 @@ export async function searchDocs(
   options?: { library?: string; topK?: number }
 ): Promise<SearchResult[]> {
   const topK = options?.topK ?? 10;
-  const candidateCount = 50; // retrieve enough for reranking without noise
+  const candidateCount = Math.max(50, topK * 3); // scale with topK
 
   // Step 1: Vector search via LanceDB
   const [queryVector] = await embedTexts([query], "search_query");
@@ -124,7 +124,7 @@ export async function searchDocs(
   return reranked.slice(0, topK).map((r) => ({
     score: Math.round(r.rerankerScore * 1000) / 1000,
     library: r.library,
-    headingPath: JSON.parse(r.headingPath) as string[],
+    headingPath: (() => { try { return JSON.parse(r.headingPath) as string[]; } catch { return []; } })(),
     content: r.text,
     chunkId: r.id,
   }));

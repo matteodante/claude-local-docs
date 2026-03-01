@@ -30,6 +30,7 @@ export async function rerank(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, texts: candidates.map((c) => c.text) }),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     throw new Error(`TEI rerank error: ${res.status} ${await res.text()}`);
@@ -38,6 +39,7 @@ export async function rerank(
   const results: { index: number; score: number }[] = await res.json();
 
   return results
+    .filter((r) => r.index >= 0 && r.index < candidates.length)
     .map((r) => ({ ...candidates[r.index], rerankerScore: r.score }))
     .sort((a, b) => b.rerankerScore - a.rerankerScore);
 }
