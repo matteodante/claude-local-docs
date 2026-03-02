@@ -19,12 +19,42 @@ A local-first alternative to Context7 for Claude Code. Indexes your project's de
 | **Monorepo** | Detects pnpm/npm/yarn workspaces, resolves catalogs | N/A |
 | **Resilience** | BM25-only fallback when TEI is down, retry + timeout | N/A |
 
-## Prerequisites
+## Requirements
 
-- **Docker** — [Docker Desktop](https://www.docker.com/products/docker-desktop/) for TEI containers
-- **Node.js 20+**
-- **NVIDIA GPU** (optional) — auto-detected, uses architecture-optimized TEI images
-- **Apple Silicon** (optional) — native Metal build via Rust/cargo (no Docker needed)
+### Hardware (GPU required)
+
+A supported GPU is **mandatory** for embedding and reranking inference. CPU-only mode is not supported.
+
+| Platform | GPU | Backend | VRAM needed |
+|---|---|---|---|
+| Windows / Linux | NVIDIA RTX 20x0+ (Turing or newer) | Docker with CUDA | ~5 GB |
+| macOS | Apple Silicon (M1/M2/M3/M4) | Native Metal (no Docker) | Uses unified memory |
+
+The three TEI models require approximately:
+- `nomic-ai/nomic-embed-text-v1.5` — ~270 MB
+- `cross-encoder/ms-marco-MiniLM-L-6-v2` — ~90 MB
+- `Qodo/Qodo-Embed-1-1.5B` — ~3 GB (FP16)
+
+First run downloads all models (~3.4 GB total). Subsequent starts use cached models.
+
+### Software
+
+| Requirement | NVIDIA path | Apple Silicon path |
+|---|---|---|
+| **Node.js 20+** | Required | Required |
+| **Docker Desktop** | Required ([install](https://www.docker.com/products/docker-desktop/)) | Not needed |
+| **NVIDIA Container Toolkit** | Linux only — required for GPU passthrough ([install](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)). Not needed on Windows (Docker Desktop handles it via WSL2). | N/A |
+| **Rust** | N/A | Required for first build ([install](https://rustup.rs)) |
+
+### Ports
+
+TEI uses three local ports (not exposed to the network):
+
+| Port | Service | Configurable via |
+|---|---|---|
+| `39281` | Doc embeddings | `TEI_EMBED_URL` |
+| `39282` | Cross-encoder reranker | `TEI_RERANK_URL` |
+| `39283` | Code embeddings | `TEI_CODE_EMBED_URL` |
 
 ## Installation
 
@@ -175,8 +205,8 @@ Auto-detection selects the optimal backend:
 | NVIDIA RTX 50x0 (Blackwell) | Docker CUDA | `120-1.9` |
 | NVIDIA RTX 40x0 (Ada) | Docker CUDA | `89-1.9` |
 | NVIDIA RTX 30x0 (Ampere) | Docker CUDA | `86-1.9` |
+| NVIDIA RTX 20x0 (Turing) | Docker CUDA | `turing-1.9` |
 | Apple Silicon | Native Metal | `cargo install --features metal` |
-| No GPU | Docker CPU | `cpu-1.9` |
 
 GPU override for NVIDIA:
 ```bash

@@ -2,7 +2,7 @@
 # start-tei.sh — Auto-detect GPU and start TEI with the optimal backend.
 #
 # Usage:
-#   ./start-tei.sh            # auto-detect (NVIDIA GPU → Docker, Apple Silicon → Metal native, else CPU Docker)
+#   ./start-tei.sh            # auto-detect (NVIDIA GPU → Docker, Apple Silicon → Metal native, else error)
 #   ./start-tei.sh --metal    # force native Metal build (macOS Apple Silicon)
 #   ./start-tei.sh --cpu      # force CPU Docker
 #   ./start-tei.sh --tag 89-1.9  # force a specific TEI Docker image tag
@@ -237,14 +237,19 @@ case "$MODE" in
     start_metal
     ;;
   auto)
-    # Auto-detect: NVIDIA → Docker GPU, Apple Silicon → Metal native, else → Docker CPU
+    # Auto-detect: NVIDIA → Docker GPU, Apple Silicon → Metal native
     if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
       start_docker
     elif [[ "$(uname -s)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]; then
       echo "Detected Apple Silicon — using native Metal backend"
       start_metal
     else
-      start_docker
+      echo "Error: No supported GPU detected."
+      echo "  - NVIDIA GPU: ensure nvidia-smi is in PATH"
+      echo "  - Apple Silicon: must be on macOS arm64"
+      echo ""
+      echo "Use --cpu to explicitly force CPU mode (slow, not recommended)."
+      exit 1
     fi
     ;;
   *)
