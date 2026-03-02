@@ -7,13 +7,13 @@
     "email": "matteodante@users.noreply.github.com"
   },
   "metadata": {
-    "version": "1.0.7"
+    "version": "1.0.16"
   },
   "plugins": [
     {
       "name": "claude-local-docs",
       "description": "Offline-capable documentation search for JS/TS projects. Reads your package.json, fetches docs (preferring llms.txt), and indexes them with a 4-stage RAG pipeline: vector search + BM25 keywords + RRF fusion + cross-encoder reranking. Embeddings and reranking run via TEI (HuggingFace Text Embeddings Inference) Docker containers with auto GPU detection (NVIDIA CUDA, Apple Metal).",
-      "version": "1.0.7",
+      "version": "1.0.16",
       "author": {
         "name": "matthew"
       },
