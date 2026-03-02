@@ -609,12 +609,14 @@ describe("getGitChangedFiles", () => {
     assert.ok(Array.isArray(result.deleted));
   });
 
-  it("detects working tree changes in this project", async () => {
+  it("returns valid structure for this project (regardless of working tree state)", async () => {
     const projectRoot = join(import.meta.dirname, "..");
     const result = await getGitChangedFiles(projectRoot);
-    // This project has uncommitted changes (we're editing it right now)
-    const allChanges = result.modified.length + result.added.length + result.deleted.length;
-    assert.ok(allChanges > 0, "Should detect uncommitted changes in this project");
+    assert.equal(result.isGitRepo, true);
+    assert.ok(result.lastCommit.length > 0, "Should have a HEAD commit");
+    assert.ok(Array.isArray(result.modified));
+    assert.ok(Array.isArray(result.added));
+    assert.ok(Array.isArray(result.deleted));
   });
 });
 
