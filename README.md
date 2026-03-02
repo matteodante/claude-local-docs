@@ -2,6 +2,23 @@
 
 A local-first alternative to Context7 for Claude Code. Indexes your project's dependency documentation **and source code** locally with production-grade semantic search. Embeddings and reranking run via TEI (HuggingFace Text Embeddings Inference) Docker containers with auto GPU detection. Supports JS/TS, Vue, Svelte, and Astro with AST-aware chunking, JSDoc extraction, and git-diff incremental indexing.
 
+## Benchmark: Semantic Search vs Grep
+
+![Benchmark Results](assets/benchmark.png)
+
+Tested on a real-world TypeScript monorepo (957 files, 4,484 indexed code chunks) with 187 generic queries across 16 categories (authentication, database, caching, error handling, etc.).
+
+**How scores are computed:**
+- **Semantic search** — scored 0-10 based on the top relevance score returned by the search pipeline (`top_relevance * 9.5 + result_count_bonus`). Zero results = zero score.
+- **Grep** — scored 0-10 using a log-scale penalty for noise (`7.5 - 1.5 * log10(matching_files)`). Few focused matches score high; hundreds of files score low. Capped at 7.5 since grep always requires manual review.
+- **Combined** — `max(Semantic, Grep)` per query. Represents what Claude Code gets when both tools are available.
+
+**How the benchmark was run:**
+1. 200 queries were written to cover common code search patterns that apply to any codebase (e.g., "How does error handling work?", "Where are background jobs defined?"). 13 queries were excluded (testing category — no tests in benchmark codebase, plus 3 queries where both tools returned zero because the feature doesn't exist).
+2. Each query was run through `search_code` (this plugin's MCP tool) and `rg` (ripgrep, same as Claude Code's built-in Grep). The MCP tool returns a relevance score (0-1) and result count; grep returns a file count.
+3. Scores were computed automatically from raw metrics — no manual judgment involved.
+4. Raw data and the scoring script are in [`scripts/`](scripts/).
+
 ## Why not Context7?
 
 | | **claude-local-docs** | **Context7** |
