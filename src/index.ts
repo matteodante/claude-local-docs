@@ -10,7 +10,12 @@ import { searchDocs } from "./search.js";
 import { analyzeDependencies } from "./workspace.js";
 import { fetchDocContent } from "./fetcher.js";
 import { resolveDocsUrl } from "./discovery.js";
-import type { Dependency, SearchResult } from "./types.js";
+import { CodeStore } from "./code-store.js";
+import { searchCode } from "./code-search.js";
+import { walkProjectFiles, computeFileHash, computeContentHash, getGitChangedFiles } from "./file-walker.js";
+import { indexCodeFile } from "./code-indexer.js";
+import { checkAllTeiHealth } from "./tei-client.js";
+import type { Dependency, SearchResult, CodeEntityType } from "./types.js";
 
 const projectRoot = resolveProjectRoot();
 
@@ -59,6 +64,7 @@ async function expandWithNeighbors(
 }
 
 const store = new DocStore(projectRoot);
+const codeStore = new CodeStore(projectRoot);
 
 const server = new McpServer({
   name: "local-docs",
@@ -70,7 +76,7 @@ server.registerTool(
   "analyze_dependencies",
   {
     description:
-      "Analyze project dependencies. Detects monorepos (pnpm workspaces, npm/yarn workspaces), resolves catalog: versions, collects deps from all workspace packages, and deduplicates. Returns deps tagged as runtime/dev plus monorepo info.",
+      "Detect and list all npm dependencies in this project. Returns each dependency tagged as runtime or dev, with version info. Handles monorepos automatically (pnpm/npm/yarn workspaces). Use this before /fetch-docs.",
     inputSchema: {
       packageJsonPath: z
         .string()
@@ -106,12 +112,13 @@ server.registerTool(
 server.registerTool(
   "store_and_index_doc",
   {
-    description: "Store and index documentation for a library. Chunks markdown, generates embeddings via nomic-embed-text-v1.5, and persists to LanceDB in .claude/docs/",
+    description:
+      "Store and index documentation content you already have as a string. Use this when you have raw markdown content in memory (e.g. from WebFetch or training data). For fetching from a URL, use fetch_and_store_doc instead.",
     inputSchema: {
-      library: z.string().describe("Library name (e.g. 'react', '@tanstack/query')"),
-      version: z.string().describe("Library version"),
-      content: z.string().describe("Raw markdown documentation content"),
-      sourceUrl: z.string().describe("URL where the docs were fetched from"),
+      library: z.string().describe("Library name — use the npm package name (e.g. 'react', '@tanstack/query')"),
+      version: z.string().describe("Library version (e.g. '18.2.0', 'latest')"),
+      content: z.string().describe("Raw markdown documentation content to index"),
+      sourceUrl: z.string().describe("URL where the docs were originally fetched from"),
     },
   },
   async ({ library, version, content, sourceUrl }) => {
@@ -152,11 +159,12 @@ server.registerTool(
 server.registerTool(
   "search_docs",
   {
-    description: "Advanced RAG search: BM25 keyword search + vector similarity → RRF fusion → cross-encoder reranking. Uses nomic-embed-text-v1.5 for embeddings and ms-marco-MiniLM for reranking.",
+    description:
+      "Search indexed library documentation using natural language queries. Use this to find API usage, configuration options, or conceptual explanations from dependency docs (e.g. 'how to set up middleware in Express', 'Zod schema validation'). For searching the project's own source code, use search_code instead.",
     inputSchema: {
-      query: z.string().describe("Search query"),
-      library: z.string().optional().describe("Filter results to a specific library"),
-      topK: z.number().optional().describe("Number of results to return (default: 10)"),
+      query: z.string().describe("Natural language search query — can be a concept ('authentication flow'), a question ('how to configure SSR'), or specific terms ('useQuery options')"),
+      library: z.string().optional().describe("Filter to a specific library by npm package name (e.g. 'react', '@tanstack/query'). Omit to search all indexed libraries."),
+      topK: z.number().optional().describe("Number of results (1-50, default: 10). Use 3-5 for focused lookups, 15-20 for broad exploration."),
     },
   },
   async ({ query, library, topK }) => {
@@ -201,7 +209,8 @@ server.registerTool(
 server.registerTool(
   "list_docs",
   {
-    description: "List all indexed documentation libraries with metadata",
+    description:
+      "List which libraries have documentation indexed, with version and fetch date. Use this to check what's available before searching, or to see if docs need refreshing.",
   },
   async () => {
     try {
@@ -235,11 +244,12 @@ server.registerTool(
 server.registerTool(
   "get_doc_section",
   {
-    description: "Retrieve specific documentation chunks by library + heading or chunk ID",
+    description:
+      "Retrieve a specific documentation section by heading name or chunk ID. Use this to read a particular section of a library's docs, or to get more context around a search_docs result.",
     inputSchema: {
-      library: z.string().describe("Library name"),
-      heading: z.string().optional().describe("Heading text to search for in the heading path"),
-      chunkId: z.number().optional().describe("Specific chunk ID to retrieve"),
+      library: z.string().describe("Library name (npm package name)"),
+      heading: z.string().optional().describe("Heading text to search for in the heading path (case-insensitive partial match)"),
+      chunkId: z.number().optional().describe("Specific chunk ID to retrieve (from a search_docs result)"),
     },
   },
   async ({ library, heading, chunkId }) => {
@@ -328,11 +338,11 @@ server.registerTool(
   "fetch_and_store_doc",
   {
     description:
-      "Fetch documentation from a URL (raw HTTP, no AI processing or truncation) and index it. Use this for llms.txt and llms-full.txt URLs to preserve full content. Handles up to 200MB, 120s timeout.",
+      "Fetch documentation from a specific URL and index it. Use this when you have a known documentation URL (e.g. llms-full.txt URL from WebSearch or the /fetch-docs reference table). Fetches raw content without truncation.",
     inputSchema: {
-      library: z.string().describe("Library name (e.g. 'react', '@tanstack/query')"),
-      version: z.string().describe("Library version"),
-      url: z.string().describe("URL to fetch documentation from (e.g. llms-full.txt URL)"),
+      library: z.string().describe("Library name — use the npm package name (e.g. 'react', '@tanstack/query')"),
+      version: z.string().describe("Library version (e.g. '18.2.0', 'latest')"),
+      url: z.string().describe("URL to fetch documentation from (e.g. 'https://react.dev/llms.txt')"),
     },
   },
   async ({ library, version, url }) => {
@@ -394,10 +404,10 @@ server.registerTool(
   "discover_and_fetch_docs",
   {
     description:
-      "Discover, fetch, and index documentation for a library automatically. Checks package.json llms/llmsFull fields first, then probes homepage, docs.{domain}, llms.{domain}, /docs/ subpath, and GitHub raw for llms-full.txt/llms.txt. Detects index files and expands them. Falls back to homepage HTML → markdown conversion. Self-contained — no WebSearch needed.",
+      "Automatically find and index documentation for an npm package. Use this when you don't have a specific URL — it probes npm metadata, homepage, GitHub, and common doc locations. Use fetch_and_store_doc instead if you already know the URL.",
     inputSchema: {
       library: z.string().describe("npm package name (e.g. 'react', '@tanstack/query')"),
-      version: z.string().optional().describe("Library version (optional, auto-detected from npm)"),
+      version: z.string().optional().describe("Library version (optional — auto-detected from npm registry)"),
     },
   },
   async ({ library, version }) => {
@@ -434,6 +444,328 @@ server.registerTool(
             text: JSON.stringify({ success: false, library, error: err.message }),
           },
         ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Tool 8: index_codebase ---
+server.registerTool(
+  "index_codebase",
+  {
+    description:
+      "Index the project's source code for semantic search. Run this once when starting work on a project, or after significant file changes, to enable search_code. Parses JS/TS files with tree-sitter for function/class/method-level chunks and generates code-specialized embeddings. Supports incremental indexing — unchanged files are skipped automatically. Respects .gitignore.",
+    inputSchema: {
+      forceReindex: z.boolean().optional().describe("Re-index all files even if unchanged (default: false)"),
+      excludePaths: z.array(z.string()).optional().describe("Additional glob patterns to exclude (e.g. ['test/**', '*.spec.ts'])"),
+      includePaths: z.array(z.string()).optional().describe("Only index files matching these glob patterns (e.g. ['src/**'])"),
+    },
+  },
+  async ({ forceReindex, excludePaths, includePaths }) => {
+    try {
+      // Pre-flight: check TEI health before starting the indexing loop
+      const health = await checkAllTeiHealth();
+      if (!health.codeEmbed.healthy) {
+        const parts: string[] = [];
+        parts.push(`code-embed (:39283): ${health.codeEmbed.error}`);
+        if (!health.rerank.healthy) parts.push(`rerank (:39282): ${health.rerank.error}`);
+        return {
+          content: [{
+            type: "text" as const,
+            text: `TEI containers are not healthy. Start them with ./start-tei.sh\n\n${parts.join("\n")}`,
+          }],
+          isError: true,
+        };
+      }
+
+      // Walk all project files (still needed for extension/gitignore filtering)
+      const files = await walkProjectFiles({
+        projectRoot,
+        excludePaths,
+        includePaths,
+      });
+
+      const currentPaths = new Set(files.map(f => f.relativePath));
+      const metadata = await codeStore.loadMetadata();
+
+      // Determine indexing strategy
+      let strategy: "full" | "git-diff" | "hash" = "hash";
+      let gitChangedPaths: Set<string> | null = null;
+      let lastGitCommit: string | undefined;
+
+      if (forceReindex) {
+        strategy = "full";
+        // Still capture HEAD for storing lastIndexedCommit after full reindex
+        const gitInfo = await getGitChangedFiles(projectRoot);
+        lastGitCommit = gitInfo.isGitRepo ? gitInfo.lastCommit : undefined;
+      } else if (metadata.lastIndexedCommit) {
+        // Try git-diff optimization
+        const gitChanges = await getGitChangedFiles(projectRoot, metadata.lastIndexedCommit);
+        lastGitCommit = gitChanges.isGitRepo ? gitChanges.lastCommit : undefined;
+        if (gitChanges.isGitRepo && (gitChanges.modified.length > 0 || gitChanges.added.length > 0 || gitChanges.deleted.length > 0)) {
+          strategy = "git-diff";
+          gitChangedPaths = new Set([...gitChanges.modified, ...gitChanges.added]);
+          // Handle deletions
+          for (const deleted of gitChanges.deleted) {
+            if (metadata.files.some(f => f.filePath === deleted)) {
+              await codeStore.removeFile(deleted);
+            }
+          }
+        } else if (gitChanges.isGitRepo && gitChanges.lastCommit === metadata.lastIndexedCommit) {
+          // Same commit, check working tree only
+          strategy = "git-diff";
+          gitChangedPaths = new Set([...gitChanges.modified, ...gitChanges.added]);
+        }
+      } else {
+        // No lastIndexedCommit — first run with hash strategy. Still capture HEAD.
+        const gitInfo = await getGitChangedFiles(projectRoot);
+        lastGitCommit = gitInfo.isGitRepo ? gitInfo.lastCommit : undefined;
+      }
+
+      let indexed = 0;
+      let skipped = 0;
+      let failed = 0;
+      let consecutiveFailures = 0;
+      const langBreakdown: Record<string, number> = {};
+      const errors: string[] = [];
+
+      for (const file of files) {
+        try {
+          // Git-diff strategy: skip files not in the changed set
+          if (strategy === "git-diff" && gitChangedPaths && !gitChangedPaths.has(file.relativePath)) {
+            skipped++;
+            langBreakdown[file.language] = (langBreakdown[file.language] ?? 0) + 1;
+            continue;
+          }
+
+          // Read file once, hash in memory (avoids triple disk read)
+          const source = await readFile(file.absolutePath, "utf-8");
+          const sha256 = computeContentHash(source);
+
+          // Hash-based check (for "hash" strategy, or as secondary guard for git-diff)
+          if (strategy !== "full") {
+            const existingHash = await codeStore.getFileHash(file.relativePath);
+            if (existingHash === sha256) {
+              skipped++;
+              langBreakdown[file.language] = (langBreakdown[file.language] ?? 0) + 1;
+              continue;
+            }
+          }
+
+          // Parse, embed, store
+          const chunks = await indexCodeFile(source, file.relativePath, file.language);
+
+          await codeStore.addFile(file.relativePath, file.language, sha256, chunks, { skipMetadataSave: true });
+          indexed++;
+          consecutiveFailures = 0; // reset on success
+          langBreakdown[file.language] = (langBreakdown[file.language] ?? 0) + 1;
+        } catch (err: any) {
+          failed++;
+          consecutiveFailures++;
+          errors.push(`${file.relativePath}: ${err.message}`);
+
+          // Abort after 5 consecutive failures — TEI is likely down
+          if (consecutiveFailures >= 5) {
+            errors.push("Aborting: 5 consecutive failures — TEI appears to be down");
+            break;
+          }
+        }
+      }
+
+      // Remove stale files (files that were indexed but no longer exist in the project)
+      const removed = await codeStore.removeStaleFiles(currentPaths);
+
+      // Rebuild FTS index once at end
+      if (indexed > 0 || removed.length > 0) {
+        await codeStore.createFtsIndex();
+      }
+
+      // Update metadata: last full index time + HEAD commit
+      const updatedMetadata = await codeStore.loadMetadata();
+      updatedMetadata.lastFullIndexAt = new Date().toISOString();
+      // Store current HEAD for git-diff on next run
+      if (lastGitCommit) {
+        updatedMetadata.lastIndexedCommit = lastGitCommit;
+      }
+      await codeStore.saveMetadata(updatedMetadata);
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              success: true,
+              strategy,
+              totalFiles: files.length,
+              indexed,
+              skipped,
+              failed,
+              removed: removed.length,
+              removedFiles: removed.length > 0 ? removed : undefined,
+              languageBreakdown: langBreakdown,
+              errors: errors.length > 0 ? errors : undefined,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (err: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error indexing codebase: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Tool 9: search_code ---
+server.registerTool(
+  "search_code",
+  {
+    description:
+      "Semantic search across the project's source code. Use this instead of Grep when searching for concepts rather than exact text — e.g. 'authentication middleware', 'database connection setup', 'error handling in API routes', 'function that validates email'. Returns function/class/method-level results with file paths, line numbers, and relevance scores. Requires index_codebase to have been run first.",
+    inputSchema: {
+      query: z.string().describe("Natural language search query — can be a concept ('authentication middleware'), a question ('function that handles payments'), or specific terms ('LanceDB vector search')"),
+      language: z.string().optional().describe("Filter to a specific language: 'typescript' or 'javascript'"),
+      filePath: z.string().optional().describe("Filter to a specific file path (relative to project root, e.g. 'src/search.ts')"),
+      entityType: z.enum(["function", "class", "method", "interface", "type_alias", "enum", "import", "variable", "module", "namespace", "other"]).optional().describe("Filter to a specific entity type"),
+      topK: z.number().optional().describe("Number of results (1-50, default: 10). Use 3-5 for focused lookups, 15-20 for broad exploration."),
+    },
+  },
+  async ({ query, language, filePath, entityType, topK }) => {
+    try {
+      if (await codeStore.isEmpty()) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No codebase indexed yet. Run index_codebase first.",
+            },
+          ],
+        };
+      }
+
+      const results = await searchCode(query, codeStore, {
+        language,
+        filePath,
+        entityType: entityType as CodeEntityType | undefined,
+        topK,
+      });
+
+      const formatted = results.map((r) => ({
+        score: r.score,
+        filePath: r.filePath,
+        language: r.language,
+        entityType: r.entityType,
+        entityName: r.entityName,
+        signature: r.signature,
+        scopeChain: r.scopeChain,
+        lines: `${r.lineStart}-${r.lineEnd}`,
+        chunkId: r.chunkId,
+        content: r.content,
+      }));
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(formatted, null, 2) }],
+      };
+    } catch (err: any) {
+      return {
+        content: [{ type: "text" as const, text: `Code search error: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Tool 10: get_codebase_status ---
+server.registerTool(
+  "get_codebase_status",
+  {
+    description:
+      "Check the status of the codebase index — how many files are indexed, language breakdown, last index time, and files changed since last index. Use this to decide whether to run index_codebase.",
+  },
+  async () => {
+    try {
+      const metadata = await codeStore.loadMetadata();
+
+      if (metadata.files.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                indexed: false,
+                message: "No codebase indexed yet. Run index_codebase to enable semantic code search.",
+              }, null, 2),
+            },
+          ],
+        };
+      }
+
+      // Walk current files to detect changes
+      const currentFiles = await walkProjectFiles({ projectRoot });
+      const currentPaths = new Set(currentFiles.map(f => f.relativePath));
+
+      // Check for changed/new/removed files
+      const indexedPaths = new Set(metadata.files.map(f => f.filePath));
+      const newFiles: string[] = [];
+      const changedFiles: string[] = [];
+      const removedFiles: string[] = [];
+
+      for (const file of currentFiles) {
+        if (!indexedPaths.has(file.relativePath)) {
+          newFiles.push(file.relativePath);
+        } else {
+          const existingHash = await codeStore.getFileHash(file.relativePath);
+          if (existingHash) {
+            const currentHash = await computeFileHash(file.absolutePath);
+            if (existingHash !== currentHash) {
+              changedFiles.push(file.relativePath);
+            }
+          }
+        }
+      }
+
+      for (const file of metadata.files) {
+        if (!currentPaths.has(file.filePath)) {
+          removedFiles.push(file.filePath);
+        }
+      }
+
+      // Language breakdown
+      const langBreakdown: Record<string, number> = {};
+      for (const file of metadata.files) {
+        langBreakdown[file.language] = (langBreakdown[file.language] ?? 0) + 1;
+      }
+
+      const totalChunks = metadata.files.reduce((sum, f) => sum + f.chunkCount, 0);
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              indexed: true,
+              totalFiles: metadata.files.length,
+              totalChunks,
+              languageBreakdown: langBreakdown,
+              lastFullIndexAt: metadata.lastFullIndexAt,
+              changes: {
+                newFiles: newFiles.length,
+                changedFiles: changedFiles.length,
+                removedFiles: removedFiles.length,
+                needsReindex: newFiles.length > 0 || changedFiles.length > 0 || removedFiles.length > 0,
+              },
+              changedFilesList: changedFiles.length > 0 ? changedFiles : undefined,
+              newFilesList: newFiles.length > 0 ? newFiles : undefined,
+              removedFilesList: removedFiles.length > 0 ? removedFiles : undefined,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (err: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error checking codebase status: ${err.message}` }],
         isError: true,
       };
     }

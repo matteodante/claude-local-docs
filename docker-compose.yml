@@ -15,6 +15,15 @@ services:
     volumes:
       - tei-rerank-cache:/data
 
+  tei-code-embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:${TEI_TAG:-cpu-1.9}
+    command: --model-id Qodo/Qodo-Embed-1-1.5B --port 80 --max-client-batch-size 8
+    ports:
+      - "39283:80"
+    volumes:
+      - tei-code-embed-cache:/data
+
 volumes:
   tei-embed-cache:
   tei-rerank-cache:
+  tei-code-embed-cache:

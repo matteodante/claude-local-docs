@@ -2,14 +2,10 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { DocRow, DocMetadata, LibraryMetadata } from "./types.js";
+import { sqlEscapeString } from "./types.js";
 
 // npm package name validation pattern
 const NPM_NAME_RE = /^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*$/;
-
-/** Escape a string for use in LanceDB SQL filter expressions. */
-function sqlEscapeString(value: string): string {
-  return value.replace(/'/g, "''");
-}
 
 /** Build a safe library filter expression. Throws on invalid names. */
 function libraryFilter(library: string): string {
@@ -19,10 +15,6 @@ function libraryFilter(library: string): string {
   return `library = '${sqlEscapeString(library)}'`;
 }
 
-// Lazy-loaded LanceDB connection
-let dbInstance: any = null;
-let tableInstance: any = null;
-
 export class DocStore {
   private docsDir: string;
   private dbPath: string;
@@ -30,6 +22,8 @@ export class DocStore {
   private rawDir: string;
   private metadata: DocMetadata | null = null;
   private nextId: number = 1;
+  private dbInstance: any = null;
+  private tableInstance: any = null;
 
   constructor(projectRoot: string) {
     this.docsDir = join(projectRoot, ".claude", "docs");
@@ -43,22 +37,22 @@ export class DocStore {
   }
 
   private async getTable(): Promise<any> {
-    if (tableInstance) return tableInstance;
+    if (this.tableInstance) return this.tableInstance;
     const lancedb = await import("@lancedb/lancedb");
-    dbInstance = await lancedb.connect(this.dbPath);
+    this.dbInstance = await lancedb.connect(this.dbPath);
 
     try {
-      tableInstance = await dbInstance.openTable("docs");
+      this.tableInstance = await this.dbInstance.openTable("docs");
       // Find max existing ID
-      const rows = await tableInstance.query().select(["id"]).toArray();
+      const rows = await this.tableInstance.query().select(["id"]).toArray();
       if (rows.length > 0) {
         this.nextId = Math.max(...rows.map((r: any) => r.id)) + 1;
       }
     } catch {
       // Table doesn't exist yet — will be created on first insert
-      tableInstance = null;
+      this.tableInstance = null;
     }
-    return tableInstance;
+    return this.tableInstance;
   }
 
   async loadMetadata(): Promise<DocMetadata> {
@@ -93,9 +87,12 @@ export class DocStore {
     await this.ensureDir();
     const lancedb = await import("@lancedb/lancedb");
 
-    if (!dbInstance) {
-      dbInstance = await lancedb.connect(this.dbPath);
+    if (!this.dbInstance) {
+      this.dbInstance = await lancedb.connect(this.dbPath);
     }
+
+    // Get or create table (before assigning IDs so nextId is up-to-date)
+    let table = await this.getTable();
 
     // Assign IDs
     const rows: DocRow[] = chunks.map((chunk) => ({
@@ -103,8 +100,6 @@ export class DocStore {
       id: this.nextId++,
     }));
 
-    // Get or create table
-    let table = await this.getTable();
     if (table) {
       // Delete existing rows for this library, then add new ones
       await table.delete(libraryFilter(library));
@@ -114,8 +109,8 @@ export class DocStore {
     } else {
       // Create table with first batch of rows
       if (rows.length > 0) {
-        table = await dbInstance.createTable("docs", rows);
-        tableInstance = table;
+        table = await this.dbInstance.createTable("docs", rows);
+        this.tableInstance = table;
       }
     }
 

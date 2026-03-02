@@ -3,14 +3,13 @@
  * Takes query + candidate passages, returns relevance scores.
  */
 
-const TEI_RERANK_URL = process.env.TEI_RERANK_URL ?? "http://localhost:39282";
+import { rerankClient } from "./tei-client.js";
 
 export interface RerankCandidate {
   id: number;
   text: string;
-  library: string;
-  headingPath: string;
   rrfScore: number;
+  [key: string]: any;  // pass-through fields (library, filePath, etc.)
 }
 
 export interface RerankResult extends RerankCandidate {
@@ -19,6 +18,7 @@ export interface RerankResult extends RerankCandidate {
 
 /**
  * Rerank candidates using TEI cross-encoder endpoint.
+ * Batching is handled by the TeiClient.
  */
 export async function rerank(
   query: string,
@@ -26,20 +26,15 @@ export async function rerank(
 ): Promise<RerankResult[]> {
   if (candidates.length === 0) return [];
 
-  const res = await fetch(`${TEI_RERANK_URL}/rerank`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, texts: candidates.map((c) => c.text) }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) {
-    throw new Error(`TEI rerank error: ${res.status} ${await res.text()}`);
+  const texts = candidates.map((c) => c.text);
+  const scored = await rerankClient.rerank(query, texts);
+
+  const results: RerankResult[] = [];
+  for (const r of scored) {
+    if (r.index >= 0 && r.index < candidates.length) {
+      results.push({ ...candidates[r.index], rerankerScore: r.score });
+    }
   }
 
-  const results: { index: number; score: number }[] = await res.json();
-
-  return results
-    .filter((r) => r.index >= 0 && r.index < candidates.length)
-    .map((r) => ({ ...candidates[r.index], rerankerScore: r.score }))
-    .sort((a, b) => b.rerankerScore - a.rerankerScore);
+  return results.sort((a, b) => b.rerankerScore - a.rerankerScore);
 }

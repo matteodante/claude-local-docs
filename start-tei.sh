@@ -82,6 +82,15 @@ if [ "$MODE" = "stop" ]; then
   exit 0
 fi
 
+# Check if all 3 endpoints are already healthy — skip restart if so
+embed_h=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:39281/health 2>/dev/null || true)
+rerank_h=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:39282/health 2>/dev/null || true)
+code_embed_h=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:39283/health 2>/dev/null || true)
+if [ "$embed_h" = "200" ] && [ "$rerank_h" = "200" ] && [ "$code_embed_h" = "200" ]; then
+  echo "All TEI endpoints already healthy. Use --stop first to restart."
+  exit 0
+fi
+
 # Stop any existing TEI before starting new ones
 stop_tei 2>/dev/null || true
 
@@ -150,6 +159,10 @@ start_metal() {
   "$TEI_BIN" --model-id cross-encoder/ms-marco-MiniLM-L-6-v2 --port 39282 &
   echo $! >> "$PID_FILE"
 
+  echo "Starting TEI code-embed (Metal) on :39283..."
+  "$TEI_BIN" --model-id Qodo/Qodo-Embed-1-1.5B --port 39283 --max-client-batch-size 8 &
+  echo $! >> "$PID_FILE"
+
   wait_for_health
 }
 
@@ -203,12 +216,13 @@ wait_for_health() {
   for i in $(seq 1 120); do
     embed=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:39281/health 2>/dev/null || true)
     rerank=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:39282/health 2>/dev/null || true)
-    if [ "$embed" = "200" ] && [ "$rerank" = "200" ]; then
+    code_embed=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:39283/health 2>/dev/null || true)
+    if [ "$embed" = "200" ] && [ "$rerank" = "200" ] && [ "$code_embed" = "200" ]; then
       printf "\n"
-      echo "Ready! embed=OK rerank=OK"
+      echo "Ready! embed=OK rerank=OK code-embed=OK"
       return 0
     fi
-    printf "\r  [%3d] embed=%s rerank=%s" "$i" "$embed" "$rerank"
+    printf "\r  [%3d] embed=%s rerank=%s code-embed=%s" "$i" "$embed" "$rerank" "$code_embed"
     sleep 3
   done
 

@@ -4,67 +4,15 @@
  *   2. BM25 search (LanceDB native FTS) — keyword/exact match
  *   3. Reciprocal Rank Fusion — merge both ranked lists
  *   4. Cross-encoder rerank — rescore top candidates
+ *
+ * TEI containers must be running — no fallback mode.
  */
 
 import type { SearchResult, DocRow } from "./types.js";
 import type { DocStore } from "./store.js";
 import { embedTexts } from "./indexer.js";
 import { rerank, type RerankCandidate } from "./reranker.js";
-
-// --- Reciprocal Rank Fusion ---
-
-interface RankedDoc {
-  id: number;
-  text: string;
-  library: string;
-  headingPath: string;
-}
-
-interface FusedResult extends RankedDoc {
-  rrfScore: number;
-}
-
-/**
- * RRF: score = sum( weight_r / (k + rank_r) ) for each ranker r.
- * k=60 is the standard default (Azure, Weaviate, OpenSearch).
- */
-function reciprocalRankFusion(
-  vectorRanked: RankedDoc[],
-  bm25Ranked: RankedDoc[],
-  options: { k: number; vectorWeight: number; bm25Weight: number }
-): FusedResult[] {
-  const { k, vectorWeight, bm25Weight } = options;
-  const scoreMap = new Map<number, FusedResult>();
-
-  // Score from vector search (rank is 1-based)
-  for (let rank = 0; rank < vectorRanked.length; rank++) {
-    const doc = vectorRanked[rank];
-    const score = vectorWeight / (k + rank + 1);
-    const existing = scoreMap.get(doc.id);
-    if (existing) {
-      existing.rrfScore += score;
-    } else {
-      scoreMap.set(doc.id, { ...doc, rrfScore: score });
-    }
-  }
-
-  // Score from BM25 search
-  for (let rank = 0; rank < bm25Ranked.length; rank++) {
-    const doc = bm25Ranked[rank];
-    const score = bm25Weight / (k + rank + 1);
-    const existing = scoreMap.get(doc.id);
-    if (existing) {
-      existing.rrfScore += score;
-    } else {
-      scoreMap.set(doc.id, { ...doc, rrfScore: score });
-    }
-  }
-
-  // Sort by fused score
-  const results = Array.from(scoreMap.values());
-  results.sort((a, b) => b.rrfScore - a.rrfScore);
-  return results;
-}
+import { reciprocalRankFusion, type RankedDoc } from "./rrf.js";
 
 // --- Main search pipeline ---
 
@@ -101,28 +49,34 @@ export async function searchDocs(
 
   // Step 3: RRF fusion (k=60, BM25 weighted higher — trust exact keyword matches for
   // framework-specific queries like "Next.js middleware" vs "NestJS middleware")
-  const fused = reciprocalRankFusion(vectorRanked, bm25Ranked, {
-    k: 60,
-    vectorWeight: 0.7,
-    bm25Weight: 1.0,
-  });
+  const rrfInputs: { docs: RankedDoc[]; weight: number }[] = [];
+  if (vectorRanked.length > 0) {
+    rrfInputs.push({ docs: vectorRanked, weight: 0.7 });
+  }
+  if (bm25Ranked.length > 0) {
+    rrfInputs.push({ docs: bm25Ranked, weight: 1.0 });
+  }
+  if (rrfInputs.length === 0) return [];
+
+  const fused = reciprocalRankFusion(rrfInputs);
 
   // Step 4: Cross-encoder rerank top 50 candidates
   const rerankCandidates: RerankCandidate[] = fused
     .slice(0, 50)
-    .map((f) => ({
-      id: f.id,
-      text: f.text,
-      library: f.library,
-      headingPath: f.headingPath,
-      rrfScore: f.rrfScore,
-    }));
+    .map((f) => ({ ...f }));
 
   const reranked = await rerank(query, rerankCandidates);
+  const finalResults = reranked.slice(0, topK).map((r) => ({
+    id: r.id,
+    score: Math.round(r.rerankerScore * 1000) / 1000,
+    library: r.library,
+    headingPath: r.headingPath,
+    text: r.text,
+  }));
 
   // Step 5: Format and return top-K
-  return reranked.slice(0, topK).map((r) => ({
-    score: Math.round(r.rerankerScore * 1000) / 1000,
+  return finalResults.map((r) => ({
+    score: r.score,
     library: r.library,
     headingPath: (() => { try { return JSON.parse(r.headingPath) as string[]; } catch { return []; } })(),
     content: r.text,

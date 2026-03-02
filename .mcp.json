@@ -5,7 +5,8 @@
       "args": ["-y", "claude-local-docs@latest"],
       "env": {
         "TEI_EMBED_URL": "http://localhost:39281",
-        "TEI_RERANK_URL": "http://localhost:39282"
+        "TEI_RERANK_URL": "http://localhost:39282",
+        "TEI_CODE_EMBED_URL": "http://localhost:39283"
       }
     }
   }

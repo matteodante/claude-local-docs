@@ -12,3 +12,10 @@ services:
         reservations:
           devices:
             - capabilities: [gpu]
+
+  tei-code-embed:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

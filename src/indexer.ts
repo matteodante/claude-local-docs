@@ -1,6 +1,6 @@
 import type { DocRow } from "./types.js";
+import { docEmbedClient, truncateAndNormalize } from "./tei-client.js";
 
-const TEI_EMBED_URL = process.env.TEI_EMBED_URL ?? "http://localhost:39281";
 const MATRYOSHKA_DIM = 384;
 
 // ── Code fence detection ────────────────────────────────────────────────
@@ -173,33 +173,11 @@ export async function embedTexts(
   taskType: "search_document" | "search_query" = "search_document"
 ): Promise<number[][]> {
   const prefixed = texts.map((t) => `${taskType}: ${t}`);
-  const embeddings: number[][] = [];
 
-  // Process in batches to stay within TEI request size limits
-  const batchSize = 32;
-  for (let i = 0; i < prefixed.length; i += batchSize) {
-    const batch = prefixed.slice(i, i + batchSize);
+  const fullVecs = await docEmbedClient.embed(prefixed, { truncate: true });
 
-    const res = await fetch(`${TEI_EMBED_URL}/embed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ inputs: batch, truncate: true }),
-    });
-    if (!res.ok) {
-      throw new Error(`TEI embed error: ${res.status} ${await res.text()}`);
-    }
-
-    const fullVecs: number[][] = await res.json();
-
-    // Matryoshka truncation to 384 dims + L2 normalize
-    for (const vec of fullVecs) {
-      const truncated = vec.slice(0, MATRYOSHKA_DIM);
-      const norm = Math.sqrt(truncated.reduce((s, v) => s + v * v, 0));
-      embeddings.push(truncated.map((v) => v / (norm || 1)));
-    }
-  }
-
-  return embeddings;
+  // Matryoshka truncation to 384 dims + L2 normalize
+  return truncateAndNormalize(fullVecs, MATRYOSHKA_DIM);
 }
 
 /**

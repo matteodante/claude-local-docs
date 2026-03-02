@@ -1,9 +1,8 @@
 /**
- * Integration test: fetch Prisma llms-full.txt, index it, and run searches.
+ * Doc search integration tests — requires TEI containers running (:39281, :39282).
+ * Tests the full doc pipeline: fetch → chunk → embed → store → search.
  *
- * Exercises the full fetch -> chunk -> embed -> store -> search -> rerank pipeline.
- *
- * Run: npm test
+ * Run: npm run test:docs
  */
 
 import { describe, it, before, after } from "node:test";
@@ -22,11 +21,7 @@ const PRISMA_URL = "https://www.prisma.io/docs/llms-full.txt";
 const CACHE_DIR = join(tmpdir(), "claude-local-docs-fixture");
 const CACHE_FILE = join(CACHE_DIR, "prisma-llms-full.txt");
 
-let tempDir: string;
-let store: DocStore;
-let fetchedContent: string;
-
-/** Load from cache or fetch from network. */
+/** Load Prisma docs from cache or fetch from network. */
 async function loadPrismaDoc(): Promise<string> {
   if (existsSync(CACHE_FILE)) {
     console.log("  Using cached Prisma docs");
@@ -44,43 +39,18 @@ async function loadPrismaDoc(): Promise<string> {
   return result.content;
 }
 
-describe("Prisma llms-full.txt integration", { timeout: 600_000 }, () => {
+describe("Doc search pipeline (Prisma)", { timeout: 600_000 }, () => {
+  let tempDir: string;
+  let store: DocStore;
+  let fetchedContent: string;
+
   before(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "claude-local-docs-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "claude-local-docs-doc-test-"));
     fetchedContent = await loadPrismaDoc();
-  });
 
-  after(async () => {
-    if (tempDir && existsSync(tempDir)) {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  // -- Fetch --
-
-  it("fetched content is substantial", () => {
     assert.ok(fetchedContent.length > 1_000_000, `Expected > 1M chars, got ${fetchedContent.length}`);
-  });
 
-  // -- Chunking --
-
-  it("chunks the markdown into reasonable pieces", () => {
-    const chunks = chunkMarkdown(fetchedContent, "prisma");
-    console.log(`  Produced ${chunks.length} chunks`);
-
-    assert.ok(chunks.length > 100, `Expected >100 chunks, got ${chunks.length}`);
-
-    for (const c of chunks) {
-      assert.equal(c.library, "prisma");
-      assert.ok(c.text.trim().length > 0, "Found empty chunk");
-      const parsed = JSON.parse(c.headingPath);
-      assert.ok(Array.isArray(parsed), `headingPath not an array: ${c.headingPath}`);
-    }
-  });
-
-  // -- Index + Store --
-
-  it("indexes and stores all chunks in LanceDB", async () => {
+    // Index and store all chunks in LanceDB
     store = new DocStore(tempDir);
 
     const chunks = await indexDocument(fetchedContent, "prisma");
@@ -98,7 +68,24 @@ describe("Prisma llms-full.txt integration", { timeout: 600_000 }, () => {
     assert.equal(result.indexSize, chunks.length);
   });
 
-  // -- Search --
+  after(() => {
+    // Force exit — LanceDB native bindings hold file locks and keep event loop alive
+    setTimeout(() => process.exit(0), 200);
+  });
+
+  it("chunks the markdown into reasonable pieces", () => {
+    const chunks = chunkMarkdown(fetchedContent, "prisma");
+    console.log(`  Produced ${chunks.length} chunks`);
+
+    assert.ok(chunks.length > 100, `Expected >100 chunks, got ${chunks.length}`);
+
+    for (const c of chunks) {
+      assert.equal(c.library, "prisma");
+      assert.ok(c.text.trim().length > 0, "Found empty chunk");
+      const parsed = JSON.parse(c.headingPath);
+      assert.ok(Array.isArray(parsed), `headingPath not an array: ${c.headingPath}`);
+    }
+  });
 
   const searchCases = [
     { query: "prisma client query", expectTerms: ["prisma", "client", "query"] },
