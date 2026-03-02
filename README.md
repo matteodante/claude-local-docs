@@ -14,27 +14,9 @@ Tested on a real-world TypeScript monorepo (957 files, 4,484 indexed code chunks
 - **Combined** — `max(Semantic, Grep)` per query. Represents what Claude Code gets when both tools are available.
 
 **How the benchmark was run:**
-1. 200 queries were written to cover common code search patterns that apply to any codebase (e.g., "How does error handling work?", "Where are background jobs defined?"). 13 queries were excluded (testing category — no tests in benchmark codebase, plus 3 queries where both tools returned zero because the feature doesn't exist).
-2. Each query was run through `search_code` (this plugin's MCP tool) and `rg` (ripgrep, same as Claude Code's built-in Grep). The MCP tool returns a relevance score (0-1) and result count; grep returns a file count.
+1. 200 queries were written to cover common code search patterns that apply to any codebase (e.g., "How does error handling work?", "Where are background jobs defined?").
+2. 8 agents ran in parallel (25 queries each). Each query was run through `search_code` (this plugin's MCP tool) and `rg` (ripgrep, same as Claude Code's built-in Grep). The MCP tool returns a relevance score (0-1) and result count; grep returns a file count.
 3. Scores were computed automatically from raw metrics — no manual judgment involved.
-4. Raw data and the scoring script are in [`scripts/`](scripts/).
-
-## Why not Context7?
-
-| | **claude-local-docs** | **Context7** |
-|---|---|---|
-| **Runs where** | Your machine (TEI Docker) | Upstash cloud servers |
-| **Privacy** | Docs never leave your machine | Queries sent to cloud API |
-| **Rate limits** | None | API-dependent |
-| **Offline** | Full search works offline | Requires internet |
-| **GPU accelerated** | NVIDIA CUDA / Apple Metal | N/A |
-| **Search quality** | 4-stage RAG (vector + BM25 + RRF + cross-encoder reranking) | Single-stage retrieval |
-| **Doc sources** | Prefers llms.txt, falls back to official docs | Pre-indexed source repos |
-| **Code search** | Semantic AST-level search via Qodo-Embed-1-1.5B | N/A |
-| **Framework support** | JS, TS, Vue, Svelte, Astro (SFC script extraction) | N/A |
-| **Scope** | Your project's actual dependencies + source code | Any library |
-| **Monorepo** | Detects pnpm/npm/yarn workspaces, resolves catalogs | N/A |
-| **Resilience** | BM25-only fallback when TEI is down, retry + timeout | N/A |
 
 ## Requirements
 
@@ -98,6 +80,23 @@ npm run build
 # Start TEI (auto-detects GPU)
 ./start-tei.sh
 ```
+
+## Why not Context7?
+
+| | **claude-local-docs** | **Context7** |
+|---|---|---|
+| **Runs where** | Your machine (TEI Docker) | Upstash cloud servers |
+| **Privacy** | Docs never leave your machine | Queries sent to cloud API |
+| **Rate limits** | None | API-dependent |
+| **Offline** | Full search works offline | Requires internet |
+| **GPU accelerated** | NVIDIA CUDA / Apple Metal | N/A |
+| **Search quality** | 4-stage RAG (vector + BM25 + RRF + cross-encoder reranking) | Single-stage retrieval |
+| **Doc sources** | Prefers llms.txt, falls back to official docs | Pre-indexed source repos |
+| **Code search** | Semantic AST-level search via Qodo-Embed-1-1.5B | N/A |
+| **Framework support** | JS, TS, Vue, Svelte, Astro (SFC script extraction) | N/A |
+| **Scope** | Your project's actual dependencies + source code | Any library |
+| **Monorepo** | Detects pnpm/npm/yarn workspaces, resolves catalogs | N/A |
+| **Resilience** | Retry with exponential backoff + 30s timeout on TEI calls | N/A |
 
 ## How it works
 
@@ -204,7 +203,7 @@ ML inference runs in TEI (HuggingFace Text Embeddings Inference) containers:
 | tei-rerank | `:39282` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranking (docs + code) |
 | tei-code-embed | `:39283` | `Qodo/Qodo-Embed-1-1.5B` | Code embeddings (1536-dim, 68.5 CoIR) |
 
-All TEI communication goes through a shared `TeiClient` class (`src/tei-client.ts`) with automatic retry (2 attempts, exponential backoff), 30s timeout, and batch splitting. If TEI is unavailable, search pipelines gracefully degrade to BM25-only results.
+All TEI communication goes through a shared `TeiClient` class (`src/tei-client.ts`) with automatic retry (2 attempts, exponential backoff), 30s timeout, and batch splitting. TEI containers must be running for both indexing and search — there is no fallback mode.
 
 ### Starting TEI
 
@@ -232,7 +231,7 @@ docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
 
 ## Search pipeline
 
-Both doc search and code search use the same 4-stage RAG pipeline:
+Doc search uses a 4-stage RAG pipeline. Code search adds a 5th file-path boost signal:
 
 | Stage | Technology | Purpose |
 |---|---|---|
@@ -251,7 +250,7 @@ Both doc search and code search use the same 4-stage RAG pipeline:
 - **File-path boost**: Queries containing file names (e.g., "rrf.ts") get a third RRF signal boosting matching files
 - **Neighbor expansion**: Adjacent chunks from the same file are merged for fuller context
 - **Incremental indexing**: Git-diff based (fast, ~50-100ms), falls back to SHA-256 hashing for non-git projects
-- **Graceful degradation**: BM25-only results when vector embedding or reranker is unavailable
+- **No fallback**: TEI must be running — search errors if containers are down
 - **SFC support**: Vue `<script>`/`<script setup>`, Svelte `<script>`/`<script context="module">`, Astro `---` frontmatter + `<script>` tags
 
 ## Storage
@@ -340,7 +339,7 @@ claude-local-docs/
 │   ├── reranker.ts           # TEI cross-encoder reranking
 │   ├── store.ts              # LanceDB "docs" table + metadata
 │   ├── code-indexer.ts       # AST chunking (tree-sitter) + Qodo-Embed embeddings
-│   ├── code-search.ts        # Code search pipeline (4-stage + file-path boost + neighbors)
+│   ├── code-search.ts        # Code search pipeline (5-stage + neighbor expansion)
 │   ├── code-store.ts         # LanceDB "code" table + file hash tracking + schema migration
 │   ├── file-walker.ts        # Project file discovery + .gitignore + git-diff
 │   ├── sfc-extractor.ts      # Vue/Svelte/Astro <script> block extraction

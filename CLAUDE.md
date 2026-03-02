@@ -24,7 +24,7 @@ The Node.js MCP server calls these via a shared `TeiClient` (`src/tei-client.ts`
 **`./start-tei.sh`** auto-detects the platform and picks the best backend:
 - **NVIDIA GPU** → Docker with architecture-optimized image (Blackwell `120`, Ada `89`, Ampere `86`, etc.)
 - **Apple Silicon** → native Metal build via `cargo install` (no Docker, GPU-accelerated)
-- **No GPU** → Docker with CPU image
+- **No GPU** → Errors by default (GPU mandatory). Use `--cpu` to force CPU Docker (slow, not recommended)
 
 Flags: `--metal` (force native Metal), `--cpu` (force CPU Docker), `--tag <tag>` (specific Docker image), `--stop` (stop all TEI).
 
@@ -91,7 +91,7 @@ The `discover_and_fetch_docs` tool (Tool 7) in `src/discovery.ts` provides autom
    - GitHub raw (main + master branches)
    - README.md fallback, homepage HTML fallback
 4. **Sequential probing** — fetches each candidate with 15s timeout, stops on first success
-5. **Index detection** — if the content is a link-heavy file (>50% link lines, 5+ links), it's treated as an index
+5. **Index detection** — if the content is a link-heavy file (>50% link lines, 8+ links), it's treated as an index
 6. **Index expansion** — fetches each linked page (concurrency 5, 200ms inter-request delay, max 100 links), converts HTML → markdown via turndown, prepends heading context
 7. **HTML → markdown** — turndown with GFM plugin; extracts `<main>`/`<article>` content, strips nav/footer/header/script/style/aside
 
