@@ -1,6 +1,6 @@
 {
   "name": "claude-local-docs",
-  "version": "1.0.19",
+  "version": "1.0.21",
   "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline (vector + BM25 + RRF + cross-encoder reranking). Uses TEI Docker containers for GPU-accelerated embeddings and reranking.",
   "author": {
     "name": "matthew",
