@@ -60,6 +60,7 @@ export async function searchCode(
     language?: string;
     entityType?: CodeEntityType;
     topK?: number;
+    expandNeighbors?: boolean;
   }
 ): Promise<CodeSearchResult[]> {
   const topK = options?.topK ?? 10;
@@ -141,6 +142,7 @@ export async function searchCode(
   });
 
   // Step 5: Neighbor expansion — merge adjacent chunks from same file
+  if (options?.expandNeighbors === false) return results;
   return expandCodeWithNeighbors(results, store);
 }
 

@@ -165,9 +165,11 @@ server.registerTool(
       query: z.string().describe("Natural language search query — can be a concept ('authentication flow'), a question ('how to configure SSR'), or specific terms ('useQuery options')"),
       library: z.string().optional().describe("Filter to a specific library by npm package name (e.g. 'react', '@tanstack/query'). Omit to search all indexed libraries."),
       topK: z.number().optional().describe("Number of results (1-50, default: 10). Use 3-5 for focused lookups, 15-20 for broad exploration."),
+      compact: z.boolean().optional().describe("Compact mode (default: true). Truncates content to ~15 lines, skips neighbor chunk expansion. Set false for full output with neighbor context."),
+      scoreThreshold: z.number().optional().describe("Minimum relevance score to include (default: 0.01). Filters noise results scoring near zero."),
     },
   },
-  async ({ query, library, topK }) => {
+  async ({ query, library, topK, compact, scoreThreshold }) => {
     try {
       if (await store.isEmpty()) {
         return {
@@ -180,21 +182,40 @@ server.registerTool(
         };
       }
 
+      const isCompact = compact !== false; // default true
+      const minScore = scoreThreshold ?? 0.01;
+
       const results = await searchDocs(query, store, { library, topK });
 
-      // Expand results with adjacent chunks for fuller context
-      const expanded = await expandWithNeighbors(results, store);
+      // Expand results with adjacent chunks only when not compact
+      const final = isCompact ? results : await expandWithNeighbors(results, store);
 
-      const formatted = expanded.map((r) => ({
-        score: r.score,
-        library: r.library,
-        heading: r.headingPath.join(" > "),
-        chunkId: r.chunkId,
-        content: r.content,
-      }));
+      // Filter by score threshold
+      const filtered = final.filter((r) => r.score >= minScore);
+
+      if (filtered.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: `No results above score threshold ${minScore} for query: "${query}"` }],
+        };
+      }
+
+      // Format as LLM-friendly text blocks
+      const textBlocks = filtered.map((r, i) => {
+        const heading = r.headingPath.join(" > ");
+        const parts: string[] = [];
+
+        parts.push(`── [${i + 1}] ${r.library} — ${heading} (score: ${r.score}) ──`);
+
+        const content = isCompact ? truncateDocContent(r.content) : r.content;
+        parts.push(content);
+
+        return parts.join("\n");
+      });
+
+      const header = `Found ${filtered.length} result(s) for "${query}"${isCompact ? " (compact — use get_doc_section with chunkId for full content)" : ""}:\n`;
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(formatted, null, 2) }],
+        content: [{ type: "text" as const, text: header + textBlocks.join("\n\n") }],
       };
     } catch (err: any) {
       return {
@@ -621,6 +642,97 @@ server.registerTool(
   }
 );
 
+/**
+ * Truncate doc content for compact mode.
+ * Keeps first ~15 lines to preserve headings, code examples, and key sentences.
+ */
+function truncateDocContent(content: string, maxLines = 15): string {
+  const lines = content.split("\n");
+  if (lines.length <= maxLines) return content;
+
+  const kept = lines.slice(0, maxLines);
+  const remaining = lines.length - maxLines;
+  kept.push(`... ${remaining} more lines (use get_doc_section with chunkId for full content)`);
+  return kept.join("\n");
+}
+
+/**
+ * Strip redundant metadata header lines from code content.
+ * These lines (// File:, // Scope:, // Flags:, // entityType:) duplicate
+ * the structured metadata already in the response.
+ */
+function stripMetadataHeader(content: string): string {
+  const lines = content.split("\n");
+  let startIdx = 0;
+  while (startIdx < lines.length) {
+    const line = lines[startIdx]!.trimStart();
+    if (
+      line.startsWith("// File:") ||
+      line.startsWith("// Scope:") ||
+      line.startsWith("// Flags:") ||
+      line.startsWith("// entityType:")
+    ) {
+      startIdx++;
+    } else {
+      break;
+    }
+  }
+  return startIdx > 0 ? lines.slice(startIdx).join("\n") : content;
+}
+
+/**
+ * Truncate code content for compact mode.
+ * Strips metadata header, keeps JSDoc + first ~10 lines of code body.
+ */
+function truncateForCompact(content: string, maxBodyLines = 10): string {
+  const cleaned = stripMetadataHeader(content);
+  const lines = cleaned.split("\n");
+  if (lines.length <= maxBodyLines) return cleaned;
+
+  const kept = lines.slice(0, maxBodyLines);
+  const remaining = lines.length - maxBodyLines;
+  kept.push(`// ... ${remaining} more lines (use Read tool for full source)`);
+  return kept.join("\n");
+}
+
+/**
+ * Format a single search result as an LLM-friendly text block.
+ *
+ * Example output:
+ * ── [1] src/auth/middleware.ts:45-89 (score: 0.95) ──
+ * function authMiddleware | scope: AuthModule
+ * ```typescript
+ * export async function authMiddleware(req, res, next) {
+ *   ...
+ * ```
+ */
+function formatResultForLLM(
+  r: { score: number; filePath: string; language: string; entityType: string; entityName: string; signature: string; scopeChain: string[]; lineStart: number; lineEnd: number; content: string; chunkId: number },
+  index: number,
+  isCompact: boolean,
+): string {
+  const parts: string[] = [];
+
+  // Header line: location + score
+  parts.push(`── [${index}] ${r.filePath}:${r.lineStart}-${r.lineEnd} (score: ${r.score}) ──`);
+
+  // Entity info line
+  const entityParts: string[] = [];
+  if (r.entityName) entityParts.push(`${r.entityType} ${r.entityName}`);
+  else entityParts.push(r.entityType);
+  if (r.scopeChain.length > 0) entityParts.push(`scope: ${r.scopeChain.join(" > ")}`);
+  if (r.signature) entityParts.push(`sig: ${r.signature}`);
+  parts.push(entityParts.join(" | "));
+
+  // Code block
+  const code = isCompact ? truncateForCompact(r.content) : stripMetadataHeader(r.content);
+  parts.push("```" + r.language);
+  parts.push(code);
+  parts.push("```");
+
+  return parts.join("\n");
+}
+
 // --- Tool 9: search_code ---
 server.registerTool(
   "search_code",
@@ -633,9 +745,11 @@ server.registerTool(
       filePath: z.string().optional().describe("Filter to a specific file path (relative to project root, e.g. 'src/search.ts')"),
       entityType: z.enum(["function", "class", "method", "interface", "type_alias", "enum", "import", "variable", "module", "namespace", "other"]).optional().describe("Filter to a specific entity type"),
       topK: z.number().optional().describe("Number of results (1-50, default: 10). Use 3-5 for focused lookups, 15-20 for broad exploration."),
+      compact: z.boolean().optional().describe("Compact mode (default: true). Truncates content to ~10 lines, skips neighbor chunk expansion. Set false for full output with neighbor context."),
+      scoreThreshold: z.number().optional().describe("Minimum relevance score to include (default: 0.01). Filters noise results scoring near zero."),
     },
   },
-  async ({ query, language, filePath, entityType, topK }) => {
+  async ({ query, language, filePath, entityType, topK, compact, scoreThreshold }) => {
     try {
       if (await codeStore.isEmpty()) {
         return {
@@ -648,28 +762,51 @@ server.registerTool(
         };
       }
 
+      const isCompact = compact !== false; // default true
+      const minScore = scoreThreshold ?? 0.01;
+
       const results = await searchCode(query, codeStore, {
         language,
         filePath,
         entityType: entityType as CodeEntityType | undefined,
         topK,
+        expandNeighbors: !isCompact,
       });
 
-      const formatted = results.map((r) => ({
-        score: r.score,
-        filePath: r.filePath,
-        language: r.language,
-        entityType: r.entityType,
-        entityName: r.entityName,
-        signature: r.signature,
-        scopeChain: r.scopeChain,
-        lines: `${r.lineStart}-${r.lineEnd}`,
-        chunkId: r.chunkId,
-        content: r.content,
-      }));
+      // Filter by score threshold
+      const filtered = results.filter((r) => r.score >= minScore);
+
+      if (filtered.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: `No results above score threshold ${minScore} for query: "${query}"` }],
+        };
+      }
+
+      // Format as LLM-friendly text blocks
+      const textBlocks = filtered.map((r, i) =>
+        formatResultForLLM(
+          {
+            score: r.score,
+            filePath: r.filePath,
+            language: r.language,
+            entityType: r.entityType,
+            entityName: r.entityName,
+            signature: r.signature,
+            scopeChain: r.scopeChain,
+            lineStart: r.lineStart,
+            lineEnd: r.lineEnd,
+            content: r.content,
+            chunkId: r.chunkId,
+          },
+          i + 1,
+          isCompact,
+        )
+      );
+
+      const header = `Found ${filtered.length} result(s) for "${query}"${isCompact ? " (compact — use Read tool for full source)" : ""}:\n`;
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(formatted, null, 2) }],
+        content: [{ type: "text" as const, text: header + textBlocks.join("\n\n") }],
       };
     } catch (err: any) {
       return {

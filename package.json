@@ -1,6 +1,6 @@
 {
   "name": "claude-local-docs",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "description": "Local-first Context7 alternative — indexes JS/TS dependency docs with a 4-stage RAG pipeline. Uses TEI (Text Embeddings Inference) Docker containers for embeddings and reranking.",
   "type": "module",
   "main": "dist/index.js",
