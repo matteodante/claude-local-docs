@@ -487,6 +487,7 @@ server.registerTool(
       });
 
       const currentPaths = new Set(files.map(f => f.relativePath));
+
       const metadata = await codeStore.loadMetadata();
 
       // Determine indexing strategy
@@ -496,6 +497,8 @@ server.registerTool(
 
       if (forceReindex) {
         strategy = "full";
+        // Drop the table so it gets recreated with the correct vector dimension
+        await codeStore.dropTable();
         // Still capture HEAD for storing lastIndexedCommit after full reindex
         const gitInfo = await getGitChangedFiles(projectRoot);
         lastGitCommit = gitInfo.isGitRepo ? gitInfo.lastCommit : undefined;

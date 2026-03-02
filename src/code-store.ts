@@ -226,6 +226,27 @@ export class CodeStore {
     return rows[0];
   }
 
+  /**
+   * Drop the "code" table and clear file metadata.
+   * Used by forceReindex to ensure the table is recreated with the correct vector dimension.
+   */
+  async dropTable(): Promise<void> {
+    const lancedb = await import("@lancedb/lancedb");
+    if (!this.dbInstance) {
+      await this.ensureDir();
+      this.dbInstance = await lancedb.connect(this.dbPath);
+    }
+    try {
+      await this.dbInstance.dropTable("code");
+    } catch { /* table may not exist */ }
+    this.tableInstance = null;
+    this.nextId = 1;
+    const metadata = await this.loadMetadata();
+    metadata.files = [];
+    metadata.schemaVersion = CodeStore.CURRENT_SCHEMA_VERSION;
+    await this.saveMetadata(metadata);
+  }
+
   async isEmpty(): Promise<boolean> {
     const table = await this.getTable();
     return !table;
