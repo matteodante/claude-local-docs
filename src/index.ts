@@ -541,6 +541,18 @@ server.registerTool(
           strategy = "git-diff";
           gitChangedPaths = new Set([...gitChanges.modified, ...gitChanges.added]);
         }
+
+        // Backfill: include any walkable file not yet in metadata (never indexed).
+        // This handles partial first runs (e.g. with includePaths) and newly
+        // created files that pre-date lastIndexedCommit.
+        if (strategy === "git-diff" && gitChangedPaths) {
+          const indexedPaths = new Set(metadata.files.map(f => f.filePath));
+          for (const file of files) {
+            if (!indexedPaths.has(file.relativePath)) {
+              gitChangedPaths.add(file.relativePath);
+            }
+          }
+        }
       } else {
         // No lastIndexedCommit — first run with hash strategy. Still capture HEAD.
         const gitInfo = await getGitChangedFiles(projectRoot);
